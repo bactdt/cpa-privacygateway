@@ -1,0 +1,20 @@
+# cpa 构建产物
+build/
+scratch
+*.so
+*.dll
+*.dylib
+# 发布包产物
+privacygateway_*.zip
+
+# Go 测试与覆盖率
+*.out
+coverage.txt
+
+# 用户提示词记录（§6.3：只给用户看，不入库）
+prompr-history.txt
+cpa
+paseo.json
+
+# make smoke 本地编译产物
+/smoke

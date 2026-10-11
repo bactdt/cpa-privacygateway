@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>privacygateway 检测面板</title>
+<style>
+  :root { --ok:#137333; --bad:#b3261e; --warn:#8a5a00; --muted:#5f6368; --line:#dadce0; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; color:#202124; background:#f8f9fa; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  section { background:#fff; border:1px solid var(--line); border-radius: 8px; padding: 16px; margin-top: 16px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  label { display:block; font-weight:600; margin-bottom:4px; }
+  input, select { width:100%; padding:8px; border:1px solid #9aa0a6; border-radius:6px; font: inherit; }
+  input:focus-visible, select:focus-visible, button:focus-visible { outline: 3px solid #1a73e8; outline-offset: 2px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #1a73e8; background:#1a73e8; color:#fff; cursor:pointer; margin: 12px 8px 0 0; }
+  button.secondary { background:#fff; color:#1a73e8; }
+  button:disabled { opacity:.55; cursor: progress; }
+  table { width:100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align:left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight:600; background:#f1f3f4; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .verdict { font-size: 16px; padding: 10px 12px; border-radius: 6px; margin-top: 12px; border:1px solid currentColor; }
+  pre { background:#f1f3f4; padding: 10px; border-radius: 6px; overflow:auto; max-height: 280px; white-space: pre-wrap; word-break: break-all; }
+  details { margin-top: 10px; }
+  code { background:#f1f3f4; padding: 0 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>privacygateway 检测面板</h1>
+  <p class="hint">单文件本地页面，直接用浏览器打开即可。密钥只保存在本页内存中，关闭页面即清除，不会发往 CPA 以外的地址。</p>
+
+  <section aria-labelledby="conn-h">
+    <h2 id="conn-h">1. 连接</h2>
+    <div class="grid">
+      <div>
+        <label for="base">CPA 地址</label>
+        <input id="base" type="url" value="http://127.0.0.1:8317" autocomplete="off">
+      </div>
+      <div>
+        <label for="mkey">管理密钥（remote-management.secret-key）</label>
+        <input id="mkey" type="password" autocomplete="off">
+        <p class="hint">用于检查插件状态，留空则跳过状态检查。</p>
+      </div>
+      <div>
+        <label for="akey">API Key（客户端调用 CPA 用的 key）</label>
+        <input id="akey" type="password" autocomplete="off">
+      </div>
+      <div>
+        <label for="model">模型</label>
+        <input id="model" list="models" placeholder="点「读取模型」或手动填写" autocomplete="off">
+        <datalist id="models"></datalist>
+      </div>
+      <div>
+        <label for="path">对话接口路径</label>
+        <input id="path" value="/v1/chat/completions" autocomplete="off">
+        <p class="hint">OpenAI 兼容格式。</p>
+      </div>
+    </div>
+    <button id="btn-models" class="secondary" type="button">读取模型</button>
+  </section>
+
+  <section aria-labelledby="status-h">
+    <h2 id="status-h">2. 插件状态</h2>
+    <p class="hint">读取 <code>/v0/management/plugins</code>，检查宿主是否发现、注册并启用了 privacygateway。</p>
+    <button id="btn-status" type="button">检查状态</button>
+    <button id="btn-enable" class="secondary" type="button" hidden>一键启用插件</button>
+    <div id="status-out" aria-live="polite"></div>
+  </section>
+
+  <section aria-labelledby="test-h">
+    <h2 id="test-h">3. 脱敏功能测试</h2>
+    <p class="hint">发送合成敏感数据（不是真实信息）。「脱敏测试」让模型逐字符复述它实际收到的内容：拆开后的占位符不会被还原，因此能看出上游到底收到了什么。「还原测试」检查回复是否被正确还原为原文。</p>
+    <label><input id="stream" type="checkbox" style="width:auto"> 使用流式（stream: true）</label>
+    <button id="btn-redact" type="button">脱敏测试</button>
+    <button id="btn-restore" class="secondary" type="button">还原测试</button>
+    <div id="test-out" aria-live="polite"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const PLUGIN_ID = "privacygateway";
+// 合成测试数据：身份证与银行卡已按校验位/Luhn 计算，能触发检测器；最后一项为对照组，不应被处理。
+const SAMPLES = [
+  { label: "邮箱", value: "user@example.com", sensitive: true },
+  { label: "手机号", value: "13812345678", sensitive: true },
+  { label: "身份证号", value: "110105199003071239", sensitive: true },
+  { label: "银行卡号", value: "6217001234567893", sensitive: true },
+  { label: "API Key", value: "sk-test1234567890abcdefABCD", sensitive: true },
+  { label: "普通日期（对照）", value: "2024年10月10日", sensitive: false },
+];
+const $ = (id) => document.getElementById(id);
+
+// 经 CPA 内嵌页面（http/https）加载时，默认连接同源的 CPA；file:// 打开时保留 127.0.0.1:8317。
+if (location.protocol === "http:" || location.protocol === "https:") {
+  $("base").value = location.origin;
+}
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") node.className = v; else node.setAttribute(k, v);
+  }
+  for (const c of children) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return node;
+}
+function baseURL() { return $("base").value.trim().replace(/\/+$/, ""); }
+function setBusy(btn, busy) { btn.disabled = busy; btn.setAttribute("aria-busy", String(busy)); }
+function show(target, ...nodes) { target.replaceChildren(...nodes); }
+function verdict(kind, text) { return el("div", { class: "verdict " + kind, role: "status" }, text); }
+
+async function http(method, path, { key, body } = {}) {
+  const headers = {};
+  if (key) headers["Authorization"] = "Bearer " + key;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  let resp;
+  try {
+    resp = await fetch(baseURL() + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch (e) {
+    throw new Error("无法连接 " + baseURL() + "：" + e.message + "（检查地址、端口、CPA 是否运行）");
+  }
+  const text = await resp.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (_) { /* 非 JSON 响应 */ }
+  return { status: resp.status, text, json };
+}
+
+// ---------- 模型列表 ----------
+$("btn-models").addEventListener("click", async (ev) => {
+  const btn = ev.currentTarget; setBusy(btn, true);
+  try {
+    const r = await http("GET", "/v1/models", { key: $("akey").value.trim() });
+    const ids = (r.json && Array.isArray(r.json.data)) ? r.json.data.map((m) => m.id).filter(Boolean) : [];
+    $("models").replaceChildren(...ids.map((id) => el("option", { value: id })));
+    if (ids.length && !$("model").value) $("model").value = ids[0];
+    btn.textContent = ids.length ? `读取模型（${ids.length} 个）` : `读取失败 HTTP ${r.status}`;
+  } catch (e) { btn.textContent = e.message; }
+  finally { setBusy(btn, false); }
+});
+
+// ---------- 插件状态 ----------
+async function fetchPlugins(key) {
+  let r = await http("GET", "/v0/management/plugins", { key });
+  if (r.status === 404) {
+    const r8 = await http("GET", "/v8/management/plugins", { key });
+    if (r8.status !== 404) r = r8;
+  }
+  return r;
+}
+
+$("btn-status").addEventListener("click", async (ev) => {
+  const btn = ev.currentTarget, out = $("status-out"); setBusy(btn, true);
+  $("btn-enable").hidden = true;
+  try {
+    const key = $("mkey").value.trim();
+    if (!key) { show(out, verdict("warn", "未填写管理密钥，跳过状态检查。")); return; }
+    const r = await fetchPlugins(key);
+    if (r.status === 404) { show(out, verdict("bad", "HTTP 404：管理接口未开启。请在 config.yaml 设置 remote-management.secret-key 并重启 CPA。")); return; }
+    if (r.status === 401 || r.status === 403) { show(out, verdict("bad", `HTTP ${r.status}：管理密钥不正确。`)); return; }
+    if (!r.json) { show(out, verdict("bad", `HTTP ${r.status}：返回不是 JSON。`), el("pre", {}, r.text.slice(0, 2000))); return; }
+
+    const d = r.json;
+    const list = Array.isArray(d.plugins) ? d.plugins : [];
+    const p = list.find((x) => String(x.id || "").toLowerCase() === PLUGIN_ID);
+    const meta = (p && p.metadata) || {};
+    const rows = [
+      ["plugins_enabled（全局开关）", d.plugins_enabled === true, String(d.plugins_enabled),
+        "在 config.yaml 设置 plugins.enabled: true 并重启 CPA。此项面板无法代改。"],
+      ["plugins_dir（扫描目录）", !!d.plugins_dir, String(d.plugins_dir || "(空)"),
+        "库文件需位于 <该目录>/linux/amd64/ 或 <该目录>/ 下。"],
+      ["发现 privacygateway", !!p, p ? String(p.path || "") : "未发现；现有: " + (list.map((x) => x.id).join(", ") || "无"),
+        "确认 privacygateway-v<版本>.so 在扫描目录中，文件名不能带 lib 前缀。"],
+      ["configured（有配置项）", !!(p && p.configured), String(p ? p.configured : "-"),
+        "config.yaml 需有 plugins.configs.privacygateway。可点「一键启用插件」自动创建。"],
+      ["enabled（配置启用）", !!(p && p.enabled), String(p ? p.enabled : "-"),
+        "可点「一键启用插件」。"],
+      ["registered（注册成功）", !!(p && p.registered), String(p ? p.registered : "-"),
+        "库已发现但未注册：查看 CPA 日志中 pluginhost 行（常见原因：glibc 低于 2.34、CPA 非 cgo 构建）。"],
+      ["effective_enabled（实际生效）", !!(p && p.effective_enabled), String(p ? p.effective_enabled : "-"),
+        "前面各项都通过后此项应为 true。"],
+      ["版本", !!meta.version, String(meta.version || "-"), ""],
+    ];
+    const tbody = el("tbody", {});
+    for (const [name, pass, value, fix] of rows) {
+      tbody.append(el("tr", {},
+        el("td", {}, name),
+        el("td", { class: pass ? "ok" : "bad" }, pass ? "通过" : "未通过"),
+        el("td", {}, value),
+        el("td", {}, pass ? "" : fix)));
+    }
+    const table = el("table", {},
+      el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "检查项"), el("th", { scope: "col" }, "结果"), el("th", { scope: "col" }, "当前值"), el("th", { scope: "col" }, "处理建议"))),
+      tbody);
+    const allOK = d.plugins_enabled === true && p && p.registered && p.effective_enabled;
+    const raw = el("details", {}, el("summary", {}, "原始 JSON（privacygateway 条目）"), el("pre", {}, JSON.stringify(p || null, null, 2)));
+    show(out, verdict(allOK ? "ok" : "bad", allOK ? "插件已加载并生效，可进行第 3 步功能测试。" : "插件未生效，按下表「处理建议」逐项修复。"), table, raw);
+    if (d.plugins_enabled === true && p && !p.enabled) $("btn-enable").hidden = false;
+  } catch (e) { show(out, verdict("bad", e.message)); }
+  finally { setBusy(btn, false); }
+});
+
+$("btn-enable").addEventListener("click", async (ev) => {
+  const btn = ev.currentTarget, out = $("status-out"); setBusy(btn, true);
+  try {
+    let r = await http("PATCH", `/v0/management/plugins/${PLUGIN_ID}/enabled`, { key: $("mkey").value.trim(), body: { enabled: true } });
+    if (r.status === 404) r = await http("PATCH", `/v8/management/plugins/${PLUGIN_ID}/enabled`, { key: $("mkey").value.trim(), body: { enabled: true } });
+    if (r.status === 200) {
+      out.prepend(verdict("ok", "已写入 config.yaml，CPA 正在异步重载。几秒后再点「检查状态」。"));
+      btn.hidden = true;
+    } else {
+      out.prepend(verdict("bad", `启用失败 HTTP ${r.status}：${r.text.slice(0, 300)}`));
+    }
+  } catch (e) { out.prepend(verdict("bad", e.message)); }
+  finally { setBusy(btn, false); }
+});
+
+// ---------- 功能测试 ----------
+function norm(s) { return String(s).replace(/[\s\-‐‑–—_·.,，、]/g, "").toLowerCase(); }
+
+async function chat(prompt) {
+  const model = $("model").value.trim();
+  if (!model) throw new Error("请先填写模型。");
+  const stream = $("stream").checked;
+  const body = { model, stream, temperature: 0, messages: [{ role: "user", content: prompt }] };
+  const headers = { "Content-Type": "application/json" };
+  const akey = $("akey").value.trim();
+  if (akey) headers["Authorization"] = "Bearer " + akey;
+  let resp;
+  try {
+    resp = await fetch(baseURL() + $("path").value.trim(), { method: "POST", headers, body: JSON.stringify(body) });
+  } catch (e) { throw new Error("无法连接 CPA：" + e.message); }
+  const text = await resp.text();
+  if (resp.status !== 200) return { status: resp.status, content: "", raw: text };
+  if (!stream) {
+    try { const j = JSON.parse(text); return { status: 200, content: j.choices?.[0]?.message?.content ?? "", raw: text }; }
+    catch (_) { return { status: 200, content: "", raw: text }; }
+  }
+  let content = "";
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^data:\s?(.*)$/);
+    if (!m || m[1] === "[DONE]") continue;
+    try { content += JSON.parse(m[1]).choices?.[0]?.delta?.content ?? ""; } catch (_) { /* 非 JSON 帧 */ }
+  }
+  return { status: 200, content, raw: text };
+}
+
+function failedResponse(out, r) {
+  const hint = r.status === 401 ? "API Key 不正确。" :
+    (r.status >= 400 && r.status < 600 && /max_findings|mapping_capacity|server_error|invalid_request/.test(r.raw)) ?
+      "插件按 fail_closed 拒绝了请求（说明插件在工作，但本次请求触发了拒绝条件）。" : "";
+  show(out, verdict("bad", `请求失败 HTTP ${r.status}。${hint}`), el("pre", {}, r.raw.slice(0, 3000)));
+}
+
+$("btn-redact").addEventListener("click", async (ev) => {
+  const btn = ev.currentTarget, out = $("test-out"); setBusy(btn, true);
+  show(out, el("p", {}, "请求中…"));
+  try {
+    const prompt = "请对下面每一项，逐个字符输出，字符之间用一个减号 \"-\" 分隔，每项占一行，行首保留编号。\n" +
+      "严格按你实际收到的字符输出，不要纠正、不要美化、不要猜测原文。\n\n" +
+      SAMPLES.map((s, i) => `${i + 1}) ${s.value}`).join("\n");
+    const r = await chat(prompt);
+    if (r.status !== 200) { failedResponse(out, r); return; }
+
+    const lines = r.content.split(/\r?\n/);
+    const tbody = el("tbody", {});
+    let leaked = 0, redacted = 0, unclear = 0, controlOK = true;
+    SAMPLES.forEach((s, i) => {
+      const line = lines.find((l) => new RegExp("^\\s*" + (i + 1) + "\\s*[)）.、]").test(l)) ?? lines.filter((l) => l.trim())[i] ?? "";
+      const n = norm(line.replace(/^\s*\d+\s*[)）.、]\s*/, ""));
+      const hasOrig = n.includes(norm(s.value));
+      // norm 已去掉分隔符与下划线，占位符 [[PG_<hex>_<n>]] 归一化后为 [[pg<hex><n>]]。
+      const hasPh = /\[\[pg[0-9a-f]{8,}\d*\]\]/.test(n) || n.includes("[[pg");
+      let state, cls;
+      if (!s.sensitive) {
+        controlOK = hasOrig && !hasPh;
+        state = controlOK ? "未被处理（正常）" : "被处理（检测过宽）"; cls = controlOK ? "ok" : "warn";
+      } else if (hasPh && !hasOrig) { state = "已脱敏：上游只看到占位符"; cls = "ok"; redacted++; }
+      else if (hasOrig) { state = "未脱敏：上游看到了原文"; cls = "bad"; leaked++; }
+      else { state = "无法判断（模型未按要求输出）"; cls = "warn"; unclear++; }
+      tbody.append(el("tr", {}, el("td", {}, s.label), el("td", { class: cls }, state), el("td", {}, line.trim().slice(0, 160))));
+    });
+    const total = SAMPLES.filter((s) => s.sensitive).length;
+    let v;
+    if (redacted === total) v = verdict("ok", `通过：${total} 项敏感数据在上游均为占位符。`);
+    else if (leaked === total) v = verdict("bad", "未通过：所有敏感数据以原文到达上游，插件没有处理这条请求。先做第 2 步状态检查；状态正常时检查 fail_closed 是否为 false、请求是否真正经过 CPA。");
+    else if (leaked > 0) v = verdict("bad", `部分未通过：${leaked} 项以原文到达上游，见下表。`);
+    else v = verdict("warn", `结果不确定：${unclear} 项模型未按格式输出，建议换模型或重试。`);
+    show(out, v,
+      el("table", {}, el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "数据"), el("th", { scope: "col" }, "判定"), el("th", { scope: "col" }, "模型输出"))), tbody),
+      el("p", { class: "hint" }, "判定依据：还原只作用于完整占位符，逐字符拆开后的占位符会原样显示。模型偶尔会擅自「纠正」输出，结果异常时可重试一次。"),
+      el("details", {}, el("summary", {}, "模型原始回复"), el("pre", {}, r.content)));
+  } catch (e) { show(out, verdict("bad", e.message)); }
+  finally { setBusy(btn, false); }
+});
+
+$("btn-restore").addEventListener("click", async (ev) => {
+  const btn = ev.currentTarget, out = $("test-out"); setBusy(btn, true);
+  show(out, el("p", {}, "请求中…"));
+  try {
+    const prompt = "请把下面的内容原样复述一遍，每项一行，不要改动、不要省略、不要解释：\n\n" + SAMPLES.map((s) => `${s.label}：${s.value}`).join("\n");
+    const r = await chat(prompt);
+    if (r.status !== 200) { failedResponse(out, r); return; }
+    const residual = /\[\[PG_[0-9a-f]+_\d+\]\]/.test(r.content) || r.content.includes("[[PG_");
+    const tbody = el("tbody", {});
+    let missing = 0;
+    for (const s of SAMPLES) {
+      const ok = norm(r.content).includes(norm(s.value));
+      if (!ok) missing++;
+      tbody.append(el("tr", {}, el("td", {}, s.label), el("td", { class: ok ? "ok" : "bad" }, ok ? "回复中为原文" : "回复中缺失")));
+    }
+    const v = residual ? verdict("bad", "未通过：回复中残留占位符 [[PG_…]]，响应还原失败。") :
+      missing ? verdict("warn", `${missing} 项未出现在回复中（可能是模型改写），残留占位符为 0。`) :
+      verdict("ok", "通过：回复中无残留占位符，原文全部还原。注意：此项单独通过不能证明脱敏发生，请以「脱敏测试」为准。");
+    show(out, v,
+      el("table", {}, el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "数据"), el("th", { scope: "col" }, "结果"))), tbody),
+      el("details", {}, el("summary", {}, "模型原始回复"), el("pre", {}, r.content)));
+  } catch (e) { show(out, verdict("bad", e.message)); }
+  finally { setBusy(btn, false); }
+});
+</script>
+</body>
+</html>
