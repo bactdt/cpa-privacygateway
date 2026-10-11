@@ -16,6 +16,7 @@ const (
 	KindPhone      Kind = "phone"
 	KindIDCard     Kind = "id_card"
 	KindBankCard   Kind = "bank_card"
+	KindCustom     Kind = "custom"
 )
 
 type Config struct {
@@ -29,6 +30,7 @@ type Config struct {
 	MinEntropyLen int
 	Allowlist     []string
 	MaxFindings   int
+	CustomRules   []string
 }
 
 func DefaultConfig() Config {
@@ -96,6 +98,17 @@ func (c Config) Detect(text string, base int, out []span) ([]span, bool) {
 		for _, rule := range credentialRules {
 			for _, loc := range rule.pattern.FindAllStringIndex(text, -1) {
 				out = append(out, span{start: base + loc[0], end: base + loc[1], kind: rule.kind})
+			}
+		}
+	}
+	for _, pattern := range c.CustomRules {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			continue
+		}
+		for _, loc := range re.FindAllStringIndex(text, -1) {
+			if loc[0] != loc[1] {
+				out = append(out, span{start: base + loc[0], end: base + loc[1], kind: KindCustom})
 			}
 		}
 	}

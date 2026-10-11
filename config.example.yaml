@@ -37,6 +37,9 @@ max_mapping_bytes: 1048576
 redact_tool_arguments: false
 # 永不脱敏的字面值列表（字面子串匹配：正文中出现该子串即排除，不是整段精确相等）。
 allowlist: []
+# 自定义脱敏规则（RE2 正则）；命中的文本会进入同一请求映射并在响应侧还原。
+# 例如：custom_rules: ['CUSTOM-[A-Z0-9]{8}']
+custom_rules: []
 
 # —— 检测器开关与阈值 ——
 detectors:

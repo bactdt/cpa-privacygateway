@@ -37,6 +37,7 @@ type config struct {
 	RedactToolArguments bool           `yaml:"redact_tool_arguments"`
 	MaxFindings         int            `yaml:"max_findings"`
 	Allowlist           []string       `yaml:"allowlist"`
+	CustomRules         []string       `yaml:"custom_rules"`
 	Detectors           detectorConfig `yaml:"detectors"`
 }
 
@@ -83,6 +84,11 @@ func parseConfig(raw []byte) (config, error) {
 	}
 	if cfg.Detectors.MinEntropy < 0 {
 		return config{}, fmt.Errorf("detectors.min_entropy must not be negative")
+	}
+	for i, pattern := range cfg.CustomRules {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return config{}, fmt.Errorf("custom_rules[%d] is invalid: %v", i, err)
+		}
 	}
 	return cfg, nil
 }
@@ -234,5 +240,6 @@ func (c config) redactConfig() redact.Config {
 		base.MaxFindings = c.MaxFindings
 	}
 	base.Allowlist = append([]string(nil), c.Allowlist...)
+	base.CustomRules = append([]string(nil), c.CustomRules...)
 	return base
 }
