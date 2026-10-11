@@ -1,0 +1,11 @@
+{
+  "id": "privacygateway",
+  "name": "Privacy Gateway",
+  "version": "0.1.0",
+  "type": "shared-library",
+  "platform": "linux/amd64",
+  "repository": "https://github.com/bactdt/cpa-privacygateway",
+  "license": "MIT",
+  "release": "https://github.com/bactdt/cpa-privacygateway/releases/tag/v0.1.0",
+  "package": "https://github.com/bactdt/cpa-privacygateway/releases/download/v0.1.0/privacygateway_0.1.0_linux_amd64.zip"
+}
