@@ -100,7 +100,7 @@ func run(lib, out, goos, goarch string) error {
 	}
 
 	soName := fmt.Sprintf("%s-v%s.so", pluginID, version)
-	soPath := fmt.Sprintf("plugins/%s/%s/%s", targetOS, targetArch, soName)
+	soPath := soName
 	if id, v, _ := inferPluginFile(soName); id != pluginID || v != version {
 		return fmt.Errorf("文件名 %s 推导出 id=%q version=%q，与预期 id=%q version=%q 不一致（防回归）", soName, id, v, pluginID, version)
 	}
@@ -164,7 +164,7 @@ func renderReadme(tmpl []byte, version, soPath string) []byte {
 // buildEntries 组装 zip 的全部条目：.so 0755，其余 0644，最后是覆盖前四项的 checksums.txt。
 func buildEntries(version string, libData, readme, snippet, panel []byte) []entry {
 	soName := fmt.Sprintf("%s-v%s.so", pluginID, version)
-	soPath := fmt.Sprintf("plugins/%s/%s/%s", targetOS, targetArch, soName)
+	soPath := soName
 	docDir := pluginID + "/"
 	entries := []entry{
 		{soPath, libData, 0o755},
