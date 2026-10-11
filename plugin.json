@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "plugins": [
     {
       "id": "privacygateway",
@@ -9,8 +9,23 @@
       "version": "0.1.1",
       "repository": "https://github.com/bactdt/cpa-privacygateway",
       "license": "MIT",
-      "tags": ["privacy", "redaction", "security"],
-      "install": {"type": "github-release"}
+      "tags": [
+        "privacy",
+        "redaction",
+        "security"
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/bactdt/cpa-privacygateway/releases/download/v0.1.1/privacygateway_0.1.1_linux_amd64.zip",
+            "sha256": "9d3c35f792c49e52a9bab66f8aa1739ca46d8f0f425237b4d1ee3fdd8199d26e",
+            "size": 3866087
+          }
+        ]
+      }
     }
   ]
 }
