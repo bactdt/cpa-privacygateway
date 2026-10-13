@@ -18,7 +18,7 @@ else
 endif
 SHARED_LIB := $(BUILD_DIR)/lib$(LIB_NAME).$(SHARED_EXT)
 
-.PHONY: all package smoke build test vet fmt fmt-check lint coverage race vulncheck docs-check clean check
+.PHONY: all package smoke smoke-panel build test vet fmt fmt-check lint coverage race vulncheck docs-check clean check
 
 all: check
 
@@ -81,8 +81,13 @@ package: build
 	$(GO) run ./scripts/package -lib $(SHARED_LIB) -out .
 
 ## smoke：对 make package 产出的 zip 解压后的 .so 做 dlopen/init/register/脱敏/管理页面冒烟
+## PANEL_ENABLED=1 时按 panel.enabled=true 路径验证（面板 200/HTML）
 smoke: package
 	CGO_ENABLED=1 $(GO) run ./scripts/smoke
+
+## smoke-panel：同 smoke，但按 panel.enabled=true 路径验证
+smoke-panel: package
+	PANEL_ENABLED=1 CGO_ENABLED=1 $(GO) run ./scripts/smoke
 
 ## clean：清理构建与覆盖率产物
 clean:

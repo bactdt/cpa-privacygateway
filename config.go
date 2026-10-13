@@ -22,6 +22,12 @@ type detectorConfig struct {
 	MinEntropyLen int     `yaml:"min_entropy_len"`
 }
 
+// panelConfig 控制内嵌检测面板（management 资源路由 panel）的可达性。
+// 默认关闭：面板页面会经浏览器持有管理密钥，生产环境建议保持关闭。
+type panelConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 type config struct {
 	Enabled             bool           `yaml:"enabled"`
 	Priority            int            `yaml:"priority"`
@@ -39,6 +45,7 @@ type config struct {
 	Allowlist           []string       `yaml:"allowlist"`
 	CustomRules         []string       `yaml:"custom_rules"`
 	Detectors           detectorConfig `yaml:"detectors"`
+	Panel               panelConfig    `yaml:"panel"`
 }
 
 func defaultConfig() config {

@@ -5,20 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>privacygateway 检测面板</title>
 <style>
-  :root { --ok:#137333; --bad:#b3261e; --warn:#8a5a00; --muted:#5f6368; --line:#dadce0; }
+  :root { --ok:#137333; --bad:#b3261e; --warn:#8a5a00; --muted:#5f6368; --line:#dadce0; --accent:#1a73e8; }
   * { box-sizing: border-box; }
   body { font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; color:#202124; background:#f8f9fa; }
   main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   h2 { font-size: 17px; margin: 0 0 12px; }
+  header p { margin-top: 0; }
+  .tabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 2px solid var(--line); }
+  .tabs button { font: inherit; padding: 10px 16px; border: none; background: none; color: var(--muted); cursor: pointer; border-radius: 8px 8px 0 0; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+  .tabs button[aria-selected="true"] { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); background: #fff; }
+  .tabs button:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
   section { background:#fff; border:1px solid var(--line); border-radius: 8px; padding: 16px; margin-top: 16px; }
+  section[hidden] { display: none; }
   .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
   label { display:block; font-weight:600; margin-bottom:4px; }
+  label.check { font-weight: 400; }
   input, select { width:100%; padding:8px; border:1px solid #9aa0a6; border-radius:6px; font: inherit; }
-  input:focus-visible, select:focus-visible, button:focus-visible { outline: 3px solid #1a73e8; outline-offset: 2px; }
+  input:focus-visible, select:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   .hint { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
-  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #1a73e8; background:#1a73e8; color:#fff; cursor:pointer; margin: 12px 8px 0 0; }
-  button.secondary { background:#fff; color:#1a73e8; }
+  .step { color: var(--muted); font-size: 13px; margin-top: 12px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; margin: 12px 8px 0 0; }
+  button.secondary { background:#fff; color:var(--accent); }
   button:disabled { opacity:.55; cursor: progress; }
   table { width:100%; border-collapse: collapse; margin-top: 8px; }
   th, td { text-align:left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -34,11 +42,19 @@
 </head>
 <body>
 <main>
-  <h1>privacygateway 检测面板</h1>
-  <p class="hint">单文件本地页面，直接用浏览器打开即可。密钥只保存在本页内存中，关闭页面即清除，不会发往 CPA 以外的地址。</p>
+  <header>
+    <h1>privacygateway 检测面板</h1>
+    <p class="hint">单文件本地页面，直接用浏览器打开即可。密钥只保存在本页内存中，关闭页面即清除，不会发往 CPA 以外的地址。</p>
+  </header>
 
-  <section aria-labelledby="conn-h">
-    <h2 id="conn-h">1. 连接</h2>
+  <nav class="tabs" role="tablist" aria-label="面板分区">
+    <button id="tab-conn" type="button" role="tab" aria-selected="true" aria-controls="panel-conn">1. 连接</button>
+    <button id="tab-status" type="button" role="tab" aria-selected="false" aria-controls="panel-status">2. 插件状态</button>
+    <button id="tab-test" type="button" role="tab" aria-selected="false" aria-controls="panel-test">3. 脱敏测试</button>
+  </nav>
+
+  <section id="panel-conn" role="tabpanel" aria-labelledby="tab-conn">
+    <h2>连接</h2>
     <div class="grid">
       <div>
         <label for="base">CPA 地址</label>
@@ -65,20 +81,22 @@
       </div>
     </div>
     <button id="btn-models" class="secondary" type="button">读取模型</button>
+    <p class="step">连接就绪后，到「插件状态」确认插件已生效，再进行「脱敏测试」。</p>
   </section>
 
-  <section aria-labelledby="status-h">
-    <h2 id="status-h">2. 插件状态</h2>
+  <section id="panel-status" role="tabpanel" aria-labelledby="tab-status" hidden>
+    <h2>插件状态</h2>
     <p class="hint">读取 <code>/v0/management/plugins</code>，检查宿主是否发现、注册并启用了 privacygateway。</p>
     <button id="btn-status" type="button">检查状态</button>
     <button id="btn-enable" class="secondary" type="button" hidden>一键启用插件</button>
     <div id="status-out" aria-live="polite"></div>
+    <p class="step">状态全部通过后，到「脱敏测试」验证实际效果。</p>
   </section>
 
-  <section aria-labelledby="test-h">
-    <h2 id="test-h">3. 脱敏功能测试</h2>
+  <section id="panel-test" role="tabpanel" aria-labelledby="tab-test" hidden>
+    <h2>脱敏测试</h2>
     <p class="hint">发送合成敏感数据（不是真实信息）。「脱敏测试」让模型逐字符复述它实际收到的内容：拆开后的占位符不会被还原，因此能看出上游到底收到了什么。「还原测试」检查回复是否被正确还原为原文。</p>
-    <label><input id="stream" type="checkbox" style="width:auto"> 使用流式（stream: true）</label>
+    <label class="check"><input id="stream" type="checkbox" style="width:auto"> 使用流式（stream: true）</label>
     <button id="btn-redact" type="button">脱敏测试</button>
     <button id="btn-restore" class="secondary" type="button">还原测试</button>
     <div id="test-out" aria-live="polite"></div>
@@ -99,11 +117,7 @@ const SAMPLES = [
 ];
 const $ = (id) => document.getElementById(id);
 
-// 经 CPA 内嵌页面（http/https）加载时，默认连接同源的 CPA；file:// 打开时保留 127.0.0.1:8317。
-if (location.protocol === "http:" || location.protocol === "https:") {
-  $("base").value = location.origin;
-}
-
+// ===== 工具 =====
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -133,9 +147,24 @@ async function http(method, path, { key, body } = {}) {
   return { status: resp.status, text, json };
 }
 
-// ---------- 模型列表 ----------
-$("btn-models").addEventListener("click", async (ev) => {
-  const btn = ev.currentTarget; setBusy(btn, true);
+// ===== Tab 切换 =====
+const TABS = ["conn", "status", "test"];
+function selectTab(name) {
+  for (const t of TABS) {
+    const selected = t === name;
+    $("tab-" + t).setAttribute("aria-selected", String(selected));
+    $("panel-" + t).hidden = !selected;
+  }
+}
+for (const t of TABS) {
+  $("tab-" + t).addEventListener("click", () => selectTab(t));
+}
+
+// ===== 模块：conn =====
+const Panel = { conn: {}, status: {}, test: {} };
+
+Panel.conn.loadModels = async function (btn) {
+  setBusy(btn, true);
   try {
     const r = await http("GET", "/v1/models", { key: $("akey").value.trim() });
     const ids = (r.json && Array.isArray(r.json.data)) ? r.json.data.map((m) => m.id).filter(Boolean) : [];
@@ -144,9 +173,10 @@ $("btn-models").addEventListener("click", async (ev) => {
     btn.textContent = ids.length ? `读取模型（${ids.length} 个）` : `读取失败 HTTP ${r.status}`;
   } catch (e) { btn.textContent = e.message; }
   finally { setBusy(btn, false); }
-});
+};
+$("btn-models").addEventListener("click", (ev) => Panel.conn.loadModels(ev.currentTarget));
 
-// ---------- 插件状态 ----------
+// ===== 模块：status =====
 async function fetchPlugins(key) {
   let r = await http("GET", "/v0/management/plugins", { key });
   if (r.status === 404) {
@@ -156,22 +186,15 @@ async function fetchPlugins(key) {
   return r;
 }
 
-$("btn-status").addEventListener("click", async (ev) => {
-  const btn = ev.currentTarget, out = $("status-out"); setBusy(btn, true);
-  $("btn-enable").hidden = true;
-  try {
-    const key = $("mkey").value.trim();
-    if (!key) { show(out, verdict("warn", "未填写管理密钥，跳过状态检查。")); return; }
-    const r = await fetchPlugins(key);
-    if (r.status === 404) { show(out, verdict("bad", "HTTP 404：管理接口未开启。请在 config.yaml 设置 remote-management.secret-key 并重启 CPA。")); return; }
-    if (r.status === 401 || r.status === 403) { show(out, verdict("bad", `HTTP ${r.status}：管理密钥不正确。`)); return; }
-    if (!r.json) { show(out, verdict("bad", `HTTP ${r.status}：返回不是 JSON。`), el("pre", {}, r.text.slice(0, 2000))); return; }
-
-    const d = r.json;
-    const list = Array.isArray(d.plugins) ? d.plugins : [];
-    const p = list.find((x) => String(x.id || "").toLowerCase() === PLUGIN_ID);
-    const meta = (p && p.metadata) || {};
-    const rows = [
+// statusChecks 把宿主返回的插件状态归一为 [检查项, 是否通过, 当前值, 处理建议] 行。
+function statusChecks(d) {
+  const list = Array.isArray(d.plugins) ? d.plugins : [];
+  const p = list.find((x) => String(x.id || "").toLowerCase() === PLUGIN_ID);
+  const meta = (p && p.metadata) || {};
+  return {
+    plugin: p,
+    allOK: d.plugins_enabled === true && !!p && !!p.registered && !!p.effective_enabled,
+    rows: [
       ["plugins_enabled（全局开关）", d.plugins_enabled === true, String(d.plugins_enabled),
         "在 config.yaml 设置 plugins.enabled: true 并重启 CPA。此项面板无法代改。"],
       ["plugins_dir（扫描目录）", !!d.plugins_dir, String(d.plugins_dir || "(空)"),
@@ -187,28 +210,47 @@ $("btn-status").addEventListener("click", async (ev) => {
       ["effective_enabled（实际生效）", !!(p && p.effective_enabled), String(p ? p.effective_enabled : "-"),
         "前面各项都通过后此项应为 true。"],
       ["版本", !!meta.version, String(meta.version || "-"), ""],
-    ];
-    const tbody = el("tbody", {});
-    for (const [name, pass, value, fix] of rows) {
-      tbody.append(el("tr", {},
-        el("td", {}, name),
-        el("td", { class: pass ? "ok" : "bad" }, pass ? "通过" : "未通过"),
-        el("td", {}, value),
-        el("td", {}, pass ? "" : fix)));
-    }
-    const table = el("table", {},
-      el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "检查项"), el("th", { scope: "col" }, "结果"), el("th", { scope: "col" }, "当前值"), el("th", { scope: "col" }, "处理建议"))),
-      tbody);
-    const allOK = d.plugins_enabled === true && p && p.registered && p.effective_enabled;
+    ],
+  };
+}
+
+function renderTable(headers, rows) {
+  const tbody = el("tbody", {});
+  for (const cells of rows) {
+    tbody.append(el("tr", {}, ...cells.map((c) => el("td", { class: c.class || "" }, c.text))));
+  }
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ...headers.map((h) => el("th", { scope: "col" }, h)))),
+    tbody);
+}
+
+Panel.status.check = async function (btn, out) {
+  setBusy(btn, true);
+  $("btn-enable").hidden = true;
+  try {
+    const key = $("mkey").value.trim();
+    if (!key) { show(out, verdict("warn", "未填写管理密钥，跳过状态检查。")); return; }
+    const r = await fetchPlugins(key);
+    if (r.status === 404) { show(out, verdict("bad", "HTTP 404：管理接口未开启。请在 config.yaml 设置 remote-management.secret-key 并重启 CPA。")); return; }
+    if (r.status === 401 || r.status === 403) { show(out, verdict("bad", `HTTP ${r.status}：管理密钥不正确。`)); return; }
+    if (!r.json) { show(out, verdict("bad", `HTTP ${r.status}：返回不是 JSON。`), el("pre", {}, r.text.slice(0, 2000))); return; }
+
+    const { plugin: p, allOK, rows } = statusChecks(r.json);
+    const table = renderTable(["检查项", "结果", "当前值", "处理建议"], rows.map(([name, pass, value, fix]) => [
+      { text: name },
+      { text: pass ? "通过" : "未通过", class: pass ? "ok" : "bad" },
+      { text: value },
+      { text: pass ? "" : fix },
+    ]));
     const raw = el("details", {}, el("summary", {}, "原始 JSON（privacygateway 条目）"), el("pre", {}, JSON.stringify(p || null, null, 2)));
-    show(out, verdict(allOK ? "ok" : "bad", allOK ? "插件已加载并生效，可进行第 3 步功能测试。" : "插件未生效，按下表「处理建议」逐项修复。"), table, raw);
-    if (d.plugins_enabled === true && p && !p.enabled) $("btn-enable").hidden = false;
+    show(out, verdict(allOK ? "ok" : "bad", allOK ? "插件已加载并生效，可进行第 3 步脱敏测试。" : "插件未生效，按下表「处理建议」逐项修复。"), table, raw);
+    if (r.json.plugins_enabled === true && p && !p.enabled) $("btn-enable").hidden = false;
   } catch (e) { show(out, verdict("bad", e.message)); }
   finally { setBusy(btn, false); }
-});
+};
 
-$("btn-enable").addEventListener("click", async (ev) => {
-  const btn = ev.currentTarget, out = $("status-out"); setBusy(btn, true);
+Panel.status.enable = async function (btn, out) {
+  setBusy(btn, true);
   try {
     let r = await http("PATCH", `/v0/management/plugins/${PLUGIN_ID}/enabled`, { key: $("mkey").value.trim(), body: { enabled: true } });
     if (r.status === 404) r = await http("PATCH", `/v8/management/plugins/${PLUGIN_ID}/enabled`, { key: $("mkey").value.trim(), body: { enabled: true } });
@@ -220,14 +262,16 @@ $("btn-enable").addEventListener("click", async (ev) => {
     }
   } catch (e) { out.prepend(verdict("bad", e.message)); }
   finally { setBusy(btn, false); }
-});
+};
+$("btn-status").addEventListener("click", (ev) => Panel.status.check(ev.currentTarget, $("status-out")));
+$("btn-enable").addEventListener("click", (ev) => Panel.status.enable(ev.currentTarget, $("status-out")));
 
-// ---------- 功能测试 ----------
+// ===== 模块：test =====
 function norm(s) { return String(s).replace(/[\s\-‐‑–—_·.,，、]/g, "").toLowerCase(); }
 
 async function chat(prompt) {
   const model = $("model").value.trim();
-  if (!model) throw new Error("请先填写模型。");
+  if (!model) throw new Error("请先在「连接」填写模型。");
   const stream = $("stream").checked;
   const body = { model, stream, temperature: 0, messages: [{ role: "user", content: prompt }] };
   const headers = { "Content-Type": "application/json" };
@@ -259,8 +303,8 @@ function failedResponse(out, r) {
   show(out, verdict("bad", `请求失败 HTTP ${r.status}。${hint}`), el("pre", {}, r.raw.slice(0, 3000)));
 }
 
-$("btn-redact").addEventListener("click", async (ev) => {
-  const btn = ev.currentTarget, out = $("test-out"); setBusy(btn, true);
+Panel.test.redact = async function (btn, out) {
+  setBusy(btn, true);
   show(out, el("p", {}, "请求中…"));
   try {
     const prompt = "请对下面每一项，逐个字符输出，字符之间用一个减号 \"-\" 分隔，每项占一行，行首保留编号。\n" +
@@ -270,7 +314,7 @@ $("btn-redact").addEventListener("click", async (ev) => {
     if (r.status !== 200) { failedResponse(out, r); return; }
 
     const lines = r.content.split(/\r?\n/);
-    const tbody = el("tbody", {});
+    const rows = [];
     let leaked = 0, redacted = 0, unclear = 0, controlOK = true;
     SAMPLES.forEach((s, i) => {
       const line = lines.find((l) => new RegExp("^\\s*" + (i + 1) + "\\s*[)）.、]").test(l)) ?? lines.filter((l) => l.trim())[i] ?? "";
@@ -285,7 +329,7 @@ $("btn-redact").addEventListener("click", async (ev) => {
       } else if (hasPh && !hasOrig) { state = "已脱敏：上游只看到占位符"; cls = "ok"; redacted++; }
       else if (hasOrig) { state = "未脱敏：上游看到了原文"; cls = "bad"; leaked++; }
       else { state = "无法判断（模型未按要求输出）"; cls = "warn"; unclear++; }
-      tbody.append(el("tr", {}, el("td", {}, s.label), el("td", { class: cls }, state), el("td", {}, line.trim().slice(0, 160))));
+      rows.push([{ text: s.label }, { text: state, class: cls }, { text: line.trim().slice(0, 160) }]);
     });
     const total = SAMPLES.filter((s) => s.sensitive).length;
     let v;
@@ -294,37 +338,44 @@ $("btn-redact").addEventListener("click", async (ev) => {
     else if (leaked > 0) v = verdict("bad", `部分未通过：${leaked} 项以原文到达上游，见下表。`);
     else v = verdict("warn", `结果不确定：${unclear} 项模型未按格式输出，建议换模型或重试。`);
     show(out, v,
-      el("table", {}, el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "数据"), el("th", { scope: "col" }, "判定"), el("th", { scope: "col" }, "模型输出"))), tbody),
+      renderTable(["数据", "判定", "模型输出"], rows),
       el("p", { class: "hint" }, "判定依据：还原只作用于完整占位符，逐字符拆开后的占位符会原样显示。模型偶尔会擅自「纠正」输出，结果异常时可重试一次。"),
       el("details", {}, el("summary", {}, "模型原始回复"), el("pre", {}, r.content)));
   } catch (e) { show(out, verdict("bad", e.message)); }
   finally { setBusy(btn, false); }
-});
+};
 
-$("btn-restore").addEventListener("click", async (ev) => {
-  const btn = ev.currentTarget, out = $("test-out"); setBusy(btn, true);
+Panel.test.restore = async function (btn, out) {
+  setBusy(btn, true);
   show(out, el("p", {}, "请求中…"));
   try {
     const prompt = "请把下面的内容原样复述一遍，每项一行，不要改动、不要省略、不要解释：\n\n" + SAMPLES.map((s) => `${s.label}：${s.value}`).join("\n");
     const r = await chat(prompt);
     if (r.status !== 200) { failedResponse(out, r); return; }
     const residual = /\[\[PG_[0-9a-f]+_\d+\]\]/.test(r.content) || r.content.includes("[[PG_");
-    const tbody = el("tbody", {});
+    const rows = [];
     let missing = 0;
     for (const s of SAMPLES) {
       const ok = norm(r.content).includes(norm(s.value));
       if (!ok) missing++;
-      tbody.append(el("tr", {}, el("td", {}, s.label), el("td", { class: ok ? "ok" : "bad" }, ok ? "回复中为原文" : "回复中缺失")));
+      rows.push([{ text: s.label }, { text: ok ? "回复中为原文" : "回复中缺失", class: ok ? "ok" : "bad" }]);
     }
     const v = residual ? verdict("bad", "未通过：回复中残留占位符 [[PG_…]]，响应还原失败。") :
       missing ? verdict("warn", `${missing} 项未出现在回复中（可能是模型改写），残留占位符为 0。`) :
       verdict("ok", "通过：回复中无残留占位符，原文全部还原。注意：此项单独通过不能证明脱敏发生，请以「脱敏测试」为准。");
     show(out, v,
-      el("table", {}, el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "数据"), el("th", { scope: "col" }, "结果"))), tbody),
+      renderTable(["数据", "结果"], rows),
       el("details", {}, el("summary", {}, "模型原始回复"), el("pre", {}, r.content)));
   } catch (e) { show(out, verdict("bad", e.message)); }
   finally { setBusy(btn, false); }
-});
+};
+$("btn-redact").addEventListener("click", (ev) => Panel.test.redact(ev.currentTarget, $("test-out")));
+$("btn-restore").addEventListener("click", (ev) => Panel.test.restore(ev.currentTarget, $("test-out")));
+
+// 经 CPA 内嵌页面（http/https）加载时，默认连接同源的 CPA；file:// 打开时保留 127.0.0.1:8317。
+if (location.protocol === "http:" || location.protocol === "https:") {
+  $("base").value = location.origin;
+}
 </script>
 </body>
 </html>

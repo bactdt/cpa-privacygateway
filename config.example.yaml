@@ -53,3 +53,10 @@ detectors:
   min_entropy: 0
   # 高熵检测的最短长度。
   min_entropy_len: 0
+
+# —— 检测面板 ——
+# 是否在 CPA 管理界面暴露内嵌检测面板（management 资源路由 panel）。
+# 默认 false：面板页面会经浏览器持有管理密钥，生产环境建议保持关闭；
+# 需要排障时改为 true 并重启 CPA。
+panel:
+  enabled: false

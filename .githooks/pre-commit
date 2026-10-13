@@ -1,0 +1,38 @@
+#!/bin/sh
+# cpa 提交前门禁（规则 §5 阶段 3 子任务 5）。
+# 启用方式（一次性）：
+#   git config core.hooksPath cpa/.githooks
+# 本脚本仅检查与 cpa 相关的暂存改动，避免拖慢无关提交。
+set -eu
+
+root="$(git rev-parse --show-toplevel)"
+staged="$(git diff --cached --name-only -- 'cpa/')"
+if [ -z "$staged" ]; then
+	exit 0
+fi
+
+echo "[cpa pre-commit] 检测到 cpa 改动，运行快速门禁…"
+export PATH=/home/gh/.local/toolchains/go/bin:$PATH
+cd "$root/cpa"
+
+echo "[cpa pre-commit] gofmt…"
+files="$(gofmt -l .)"
+if [ -n "$files" ]; then
+	echo "[cpa pre-commit] 失败：以下文件未格式化，请执行 'make fmt'："
+	echo "$files"
+	exit 1
+fi
+
+echo "[cpa pre-commit] go vet…"
+go vet ./... || exit 1
+
+echo "[cpa pre-commit] 自定义 linter…"
+go run ./scripts/lint || exit 1
+
+echo "[cpa pre-commit] 结构测试…"
+go test ./internal/... || exit 1
+
+echo "[cpa pre-commit] 文档校验…"
+go run ./scripts/check-docs || exit 1
+
+echo "[cpa pre-commit] 通过。"

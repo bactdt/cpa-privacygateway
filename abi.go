@@ -146,6 +146,10 @@ var abiState = struct {
 	// 从未注册过时为零值 false 的兜底由 gatewayFailClosed 补为 true。
 	lastFailClosed bool
 	hadConfig      bool
+	// panelEnabled 保存最近一次成功注册配置的 panel.enabled 取值：
+	// management.register/handle 据此决定是否声明面板资源与是否服务页面。
+	// 从未注册过时为零值 false（面板关闭），与历史默认行为一致。
+	panelEnabled bool
 }{}
 
 const maxCGoBytesLen = C.size_t(1<<31 - 1)
@@ -296,18 +300,17 @@ func handleABIRegister(ctx context.Context, method string, request []byte) ([]by
 		return rejectLifecycleConfig(ctx, method, errParse)
 	}
 	abiState.Lock()
-	shuttingDown := abiState.shuttingDown
-	previous := abiState.plugin
-	abiState.Unlock()
-	if shuttingDown {
+	if abiState.shuttingDown {
+		abiState.Unlock()
 		logHost(ctx, logLevelWarn, "privacy gateway ignored lifecycle call during shutdown", map[string]any{"method": method})
 		return nil, fmt.Errorf("privacy gateway is shutting down")
 	}
+	// Serialize selection, handoff and publication to preserve concurrent calls.
+	previous := abiState.plugin
 	p := newPlugin(cfg)
 	if previous != nil {
 		p.states.takeOverFrom(previous.states)
 	}
-	abiState.Lock()
 	if abiState.stopJanitor != nil {
 		close(abiState.stopJanitor)
 	}
@@ -316,6 +319,7 @@ func handleABIRegister(ctx context.Context, method string, request []byte) ([]by
 	abiState.stopJanitor = stop
 	abiState.lastFailClosed = cfg.failClosed()
 	abiState.hadConfig = true
+	abiState.panelEnabled = cfg.Panel.Enabled
 	abiState.Unlock()
 	go p.runJanitor(stop)
 	return registrationEnvelope()
@@ -333,28 +337,14 @@ func rejectLifecycleConfig(ctx context.Context, method string, errParse error) (
 }
 
 func registrationEnvelope() ([]byte, error) {
+	abiState.RLock()
+	panelEnabled := abiState.panelEnabled
+	abiState.RUnlock()
 	return abiOKEnvelope(abiRegistration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata:      pluginMetadata(),
-		Capabilities:  abiCapabilities{RequestInterceptor: true, RequestLifecyclePlugin: true, ResponseInterceptor: true, StreamChunkInterceptor: true, ManagementAPI: true},
+		Capabilities:  abiCapabilities{RequestInterceptor: true, RequestLifecyclePlugin: true, ResponseInterceptor: true, StreamChunkInterceptor: true, ManagementAPI: panelEnabled},
 	})
-}
-
-func pluginMetadata() pluginapi.Metadata {
-	return pluginapi.Metadata{
-		Name:             "privacygateway",
-		Version:          pluginVersion,
-		Author:           "duanjuapp",
-		GitHubRepository: "https://github.com/bactdt/guoguo",
-		ConfigFields: []pluginapi.ConfigField{
-			{Name: "max_concurrency", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum number of intercepted requests allowed in flight; 0 disables the limit."},
-			{Name: "reject_keyword", Type: pluginapi.ConfigFieldTypeString, Description: "Terminates requests whose raw body contains this keyword."},
-			{Name: "fail_closed", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Reject unparseable or oversized supported requests instead of passing them through."},
-			{Name: "max_body_bytes", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum request body size inspected by the gateway."},
-			{Name: "redact_tool_arguments", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Also redact tool call argument strings."},
-			{Name: "allowlist", Type: pluginapi.ConfigFieldTypeArray, Description: "Literal values that are never redacted."},
-		},
-	}
 }
 
 func beginPluginCall() (*plugin, func(), error) {

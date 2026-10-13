@@ -1,0 +1,353 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration test": {
+      "status": "passed",
+      "failingExample": "All 4 TestStreamHost* tests FAIL on unfixed code as expected.\nOpenAI bare (7-rune pieces of redacted \"邮箱 [[PG_<hash>_1]] 手机 [[PG_<hash>_2]] 结束\"): every chunk 0..9 returns DropChunk=true, Body=\"\" (incl. final finish_reason:\"stop\" chunk) -> delta concat \"\" != \"邮箱 user@example.com 手机 13812345678 结束\".\nRandom property (seed 1) iter=0 original=\"[ ab 13812345678 13812345678 [x] user@example.com 13812345678 [x]\" sizes=[6 6 3 12]: all 19 chunks DropChunk=true, Body=\"\".\nCodex single lines: chunk 0 \"event: response.output_text.delta\" and chunk 1 \"data: {...\\\"delta\\\":\\\"邮箱 [[PG\\\"}\" -> DropChunk=true, Body=\"\"; delta concat \"\".\nClaude split across frames: chunk0 output = \"event: content_block_delta\\n{...\\\"text\\\":\\\"邮箱 [[PG_98\\\"}}\\n\\n\" (data: prefix lost, unrestored [[PG_ fragment leaked); chunk1 text \"cedba4deaca324_1]] 手机 13812345678 结束\"; concat != original.",
+      "lastRunTimestamp": 1791687517056
+    },
+    "2. Write preservation property tests (BEFORE implementing fix)": {
+      "status": "passed",
+      "lastRunTimestamp": 1791687714208
+    },
+    "3.13 Verify bug condition exploration test now passes": {
+      "status": "passed",
+      "lastRunTimestamp": 1791690126735
+    },
+    "3.14 Verify preservation tests still pass": {
+      "status": "passed",
+      "lastRunTimestamp": 1791690208158
+    }
+  },
+  "executionHistory": {
+    "1. Write bug condition exploration test": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359471
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687368866
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687552607
+      }
+    ],
+    "2. Write preservation property tests (BEFORE implementing fix)": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359473
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687564591
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687744832
+      }
+    ],
+    "3.1 新增 `Mapping.RestoreCount`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359475
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687752298
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687819110
+      }
+    ],
+    "3.2 新增 JSON 定点编辑原语 `redact/jsonedit.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359479
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687824675
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687957823
+      }
+    ],
+    "3.3 新增文本流残留引擎 `redact/stream_text.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359480
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687974407
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688316737
+      }
+    ],
+    "3.4 OpenAI chat 规划器与注入 `redact/stream_openai.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359481
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688325857
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688548215
+      }
+    ],
+    "3.5 Claude 规划器与合成帧 `redact/stream_claude.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359481
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688555047
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688627672
+      }
+    ],
+    "3.6 Gemini 规划器与注入 `redact/stream_gemini.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359482
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688632974
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688769268
+      }
+    ],
+    "3.7 Responses 规划器与合成帧 `redact/stream_responses.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359483
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688775305
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688900765
+      }
+    ],
+    "3.8 `StreamRestorer` 增加文本流状态与统计 `redact/stream.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359484
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791688906859
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689004702
+      }
+    ],
+    "3.9 载荷形态分派与入口 `RestorePayload` `redact/stream_payload.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359485
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689011255
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689351908
+      }
+    ],
+    "3.10 插件接线 `plugin.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359486
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689359104
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689617148
+      }
+    ],
+    "3.11 删除旧行分帧路径并改写依赖旧语义的测试 `redact/stream.go`": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359487
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689623239
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689736088
+      }
+    ],
+    "3.12 性质测试与 fuzz 扩展": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359488
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791689743626
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690076531
+      }
+    ],
+    "3.13 Verify bug condition exploration test now passes": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359489
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690086235
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690148474
+      }
+    ],
+    "3.14 Verify preservation tests still pass": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359490
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690154082
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690232979
+      }
+    ],
+    "3.15 文档同步": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359491
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690238190
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690565048
+      }
+    ],
+    "3.16 真实宿主端到端验收": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359492
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690571313
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690739502
+      }
+    ],
+    "4. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791687359493
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690746508
+      },
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690846572
+      }
+    ],
+    "3. Fix for 流式还原丢弃宿主裸载荷块并无法还原跨事件占位符": [
+      {
+        "executionId": "b434e025-ad25-415b-8123-e8a98ed5a71e",
+        "chatSessionId": "sess_6af6bed2-e2f2-4fdc-88ef-caa11d16c7c6",
+        "timestamp": 1791690739509
+      }
+    ]
+  }
+}

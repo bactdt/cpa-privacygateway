@@ -1,8 +1,8 @@
 // Command package 把 build/libprivacygateway.so 打成 CPA 可直接解压使用的 zip 插件包。
 //
-// 包结构（解压到 CPA 工作目录）：
+// 包结构（商店自动安装；手动解压后将动态库放入插件目录）：
 //
-//	plugins/linux/amd64/privacygateway-v<ver>.so
+//	privacygateway-v<ver>.so
 //	privacygateway/README.md
 //	privacygateway/config.snippet.yaml
 //	privacygateway/checksums.txt
@@ -76,7 +76,7 @@ func run(lib, out, goos, goarch string) error {
 	if !validVersion(version) {
 		return fmt.Errorf("版本 %q 不符合宿主规则 ^[0-9][0-9A-Za-z.+-]*$", version)
 	}
-	if err := checkMetadataName("abi.go"); err != nil {
+	if err := checkMetadataName("metadata.go"); err != nil {
 		return err
 	}
 	libData, err := os.ReadFile(lib)

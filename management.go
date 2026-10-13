@@ -15,10 +15,14 @@ import (
 //go:embed packaging/panel.html
 var panelHTML []byte
 
-// managementPanelEnabled keeps the panel implementation available for
-// operators who explicitly re-enable it, while leaving the public panel
-// endpoint disabled by default for security.
-const managementPanelEnabled = false
+// panelEnabled 报告面板是否可达：取最近一次成功注册配置的 panel.enabled
+// （见 abi.go 的 abiState.panelEnabled）。从未注册过时为零值 false，
+// 与历史"默认关闭"行为一致。面板页面会经浏览器持有管理密钥，默认关闭。
+func panelEnabled() bool {
+	abiState.RLock()
+	defer abiState.RUnlock()
+	return abiState.panelEnabled
+}
 
 type abiResourceRoute struct {
 	Path        string
@@ -60,7 +64,7 @@ func handleABIManagement(ctx context.Context, method string, request []byte) (ra
 
 	switch method {
 	case pluginabi.MethodManagementRegister:
-		if !managementPanelEnabled {
+		if !panelEnabled() {
 			return abiOKEnvelope(abiManagementRegistrationResponse{Routes: []struct{}{}, Resources: []abiResourceRoute{}})
 		}
 		return abiOKEnvelope(abiManagementRegistrationResponse{
@@ -79,7 +83,7 @@ func handleABIManagement(ctx context.Context, method string, request []byte) (ra
 }
 
 func handleABIManagementPanel(ctx context.Context, request []byte) ([]byte, error) {
-	if !managementPanelEnabled {
+	if !panelEnabled() {
 		return abiOKEnvelope(managementPlainTextResponse(http.StatusNotFound, "privacy gateway management resource not found"))
 	}
 	var req abiManagementHandleRequest
