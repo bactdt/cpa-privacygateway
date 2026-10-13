@@ -21,8 +21,8 @@
             "goos": "linux",
             "goarch": "amd64",
             "url": "https://github.com/bactdt/cpa-privacygateway/releases/download/v0.1.4/privacygateway_0.1.4_linux_amd64.zip",
-            "sha256": "ea38c5bbf6d1088df3c7fa74d541ea141862867198c024048c5c19c9551c1d72",
-            "size": 3867296
+            "sha256": "727104c9e63922c5d12ca0e4b7c5c4d9cdbe9c7a7d7b2f99fb3a19a6cef58d87",
+            "size": 3882115
           }
         ]
       }
