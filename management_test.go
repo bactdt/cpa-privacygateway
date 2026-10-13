@@ -243,7 +243,7 @@ func TestManagementIndependentOfRegistration(t *testing.T) {
 }
 
 func TestRegistrationDoesNotDeclareManagementAPI(t *testing.T) {
-	raw, err := registrationEnvelope()
+	raw, err := registrationEnvelope(false)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -298,5 +298,37 @@ func TestManagementResponseBodyIsBase64(t *testing.T) {
 	}
 	if len(body) == 0 || bytes.Contains([]byte(body), []byte("<!doctype")) {
 		t.Error("Body 应为 Base64 文本，而非明文 HTML")
+	}
+}
+
+// TestPanelDisabledAfterShutdownAndReinit 覆盖生命周期清理：shutdown 与
+// 重新 init 都必须清除上一轮注册遗留的 panel.enabled，未重新 register
+// 前面板保持关闭。
+func TestPanelDisabledAfterShutdownAndReinit(t *testing.T) {
+	resetABIState(t)
+	raw, _ := json.Marshal(abiLifecycleRequest{ConfigYAML: []byte("panel:\n  enabled: true")})
+	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister, raw); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	abiState.RLock()
+	enabled := abiState.panelEnabled
+	abiState.RUnlock()
+	if !enabled {
+		t.Fatal("前置条件：注册 panel.enabled=true 后 abiState.panelEnabled 应为 true")
+	}
+
+	PrivacyGatewayPluginShutdown()
+	if panelEnabled() {
+		t.Error("shutdown 后 panelEnabled 应被清除为 false")
+	}
+
+	// 重新 init 走同一重置路径（cgo 导出函数无法在测试中直接调用，
+	// 这里验证其共享的 resetPanelEnabledLocked 语义）。
+	abiState.Lock()
+	abiState.panelEnabled = true
+	resetPanelEnabledLocked()
+	abiState.Unlock()
+	if panelEnabled() {
+		t.Error("重新 init 路径重置后未重新 register，panelEnabled 应保持 false")
 	}
 }

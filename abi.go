@@ -154,6 +154,12 @@ var abiState = struct {
 
 const maxCGoBytesLen = C.size_t(1<<31 - 1)
 
+// resetPanelEnabledLocked 清除面板开关（调用方须持有 abiState 写锁）：
+// shutdown 与重新 init 都视为面板不可达，未重新 register 前保持关闭。
+func resetPanelEnabledLocked() {
+	abiState.panelEnabled = false
+}
+
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, pluginAPI *C.cliproxy_plugin_api) C.int {
 	if host == nil || pluginAPI == nil {
@@ -162,6 +168,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, pluginAPI *C.cliproxy_plugi
 	abiState.Lock()
 	abiState.host = host
 	abiState.shuttingDown = false
+	resetPanelEnabledLocked()
 	abiState.Unlock()
 
 	pluginAPI.abi_version = C.uint32_t(pluginabi.ABIVersion)
@@ -215,6 +222,7 @@ func PrivacyGatewayPluginShutdown() {
 	}
 	abiState.plugin = nil
 	abiState.host = nil
+	resetPanelEnabledLocked()
 	abiState.Unlock()
 	abiState.inFlight.Wait()
 }
@@ -322,24 +330,24 @@ func handleABIRegister(ctx context.Context, method string, request []byte) ([]by
 	abiState.panelEnabled = cfg.Panel.Enabled
 	abiState.Unlock()
 	go p.runJanitor(stop)
-	return registrationEnvelope()
+	// 用本次注册的取值构造信封，避免并发重配在解锁后翻转全局状态
+	// 导致响应声明错误的能力位。
+	return registrationEnvelope(cfg.Panel.Enabled)
 }
 
 func rejectLifecycleConfig(ctx context.Context, method string, errParse error) ([]byte, error) {
 	abiState.RLock()
 	hasPrevious := abiState.plugin != nil
+	panelEnabled := abiState.panelEnabled
 	abiState.RUnlock()
 	if method == pluginabi.MethodPluginReconfigure && hasPrevious {
 		logHost(ctx, logLevelError, "privacy gateway rejected new config, keeping previous config", map[string]any{"error": errParse.Error()})
-		return registrationEnvelope()
+		return registrationEnvelope(panelEnabled)
 	}
 	return nil, errParse
 }
 
-func registrationEnvelope() ([]byte, error) {
-	abiState.RLock()
-	panelEnabled := abiState.panelEnabled
-	abiState.RUnlock()
+func registrationEnvelope(panelEnabled bool) ([]byte, error) {
 	return abiOKEnvelope(abiRegistration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata:      pluginMetadata(),
