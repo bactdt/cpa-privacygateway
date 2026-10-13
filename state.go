@@ -16,19 +16,22 @@ type requestState struct {
 	lastSeen time.Time
 }
 
-func (s *requestState) setMapping(mapping *redact.Mapping) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mapping = mapping
-	s.stream = nil
-	s.lastSeen = time.Now()
+func (s *requestState) setFormat(format string) {
+	s.useFormat(format)
 }
 
-func (s *requestState) setFormat(format string) {
+// useFormat binds the first non-empty format and atomically rejects conflicts.
+func (s *requestState) useFormat(format string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.format = format
+	if s.format != "" && format != "" && s.format != format {
+		return s.format, false
+	}
+	if s.format == "" {
+		s.format = format
+	}
 	s.lastSeen = time.Now()
+	return s.format, true
 }
 
 func (s *requestState) getStreamRestorer() *redact.StreamRestorer {
@@ -100,6 +103,11 @@ func (t *stateTable) acquire(requestID string) (*requestState, bool, bool) {
 	if t.maxActive > 0 && t.active >= t.maxActive {
 		return nil, false, false
 	}
+	// Reload can tighten the item limit below the number of retained requests.
+	// Keep their mappings, but admit no new IDs until there is enough capacity.
+	if len(t.entries) > t.maxItems {
+		return nil, false, false
+	}
 	if len(t.entries) >= t.maxItems {
 		if !t.evictOldestLocked() {
 			return nil, false, false
@@ -113,6 +121,11 @@ func (t *stateTable) acquire(requestID string) (*requestState, bool, bool) {
 
 func (t *stateTable) get(requestID string) *requestState {
 	t.mu.Lock()
+	if t.redirect != nil {
+		next := t.redirect
+		t.mu.Unlock()
+		return next.get(requestID)
+	}
 	defer t.mu.Unlock()
 	state, ok := t.entries[requestID]
 	if !ok {
@@ -124,37 +137,45 @@ func (t *stateTable) get(requestID string) *requestState {
 	return state
 }
 
-func (t *stateTable) setMapping(requestID string, mapping *redact.Mapping) {
+// setMapping stores mapping only in an admitted entry. It returns the mapping
+// currently owned by the entry and whether this call installed it. Keeping the
+// check and assignment under the requestState lock makes first-use races safe:
+// concurrent callbacks share the winner's mapping instead of overwriting it.
+func (t *stateTable) setMapping(requestID string, mapping *redact.Mapping) (*redact.Mapping, bool) {
+	if mapping == nil {
+		return nil, false
+	}
 	t.mu.Lock()
 	if t.redirect != nil {
 		next := t.redirect
 		t.mu.Unlock()
-		next.setMapping(requestID, mapping)
-		return
+		return next.setMapping(requestID, mapping)
 	}
 	state, ok := t.entries[requestID]
 	if !ok {
-		if t.maxActive > 0 && t.active >= t.maxActive || len(t.entries) >= t.maxItems {
-			t.mu.Unlock()
-			return
-		}
-		state = &requestState{admitted: true, lastSeen: time.Now()}
-		t.entries[requestID] = state
-		t.active++
+		t.mu.Unlock()
+		return nil, false
 	}
 	state.mu.Lock()
-	hasMapping := state.mapping != nil
-	state.mu.Unlock()
-	if hasMapping {
-		t.mu.Unlock()
-		return
+	defer state.mu.Unlock()
+	defer t.mu.Unlock()
+	state.lastSeen = time.Now()
+	if state.mapping != nil {
+		return state.mapping, false
 	}
-	t.mu.Unlock()
-	state.setMapping(mapping)
+	state.mapping = mapping
+	state.stream = nil
+	return mapping, true
 }
 
 func (t *stateTable) setFormat(requestID, format string) {
 	t.mu.Lock()
+	if t.redirect != nil {
+		next := t.redirect
+		t.mu.Unlock()
+		next.setFormat(requestID, format)
+		return
+	}
 	state, ok := t.entries[requestID]
 	t.mu.Unlock()
 	if ok {
@@ -164,6 +185,11 @@ func (t *stateTable) setFormat(requestID, format string) {
 
 func (t *stateTable) streamRestorer(requestID string) *redact.StreamRestorer {
 	t.mu.Lock()
+	if t.redirect != nil {
+		next := t.redirect
+		t.mu.Unlock()
+		return next.streamRestorer(requestID)
+	}
 	state, ok := t.entries[requestID]
 	t.mu.Unlock()
 	if !ok {
@@ -174,6 +200,11 @@ func (t *stateTable) streamRestorer(requestID string) *redact.StreamRestorer {
 
 func (t *stateTable) mapping(requestID string) *redact.Mapping {
 	t.mu.Lock()
+	if t.redirect != nil {
+		next := t.redirect
+		t.mu.Unlock()
+		return next.mapping(requestID)
+	}
 	state, ok := t.entries[requestID]
 	t.mu.Unlock()
 	if !ok {
@@ -183,11 +214,33 @@ func (t *stateTable) mapping(requestID string) *redact.Mapping {
 }
 
 func (t *stateTable) release(requestID string) {
+	t.releaseEntry(requestID, false)
+}
+
+// Failed first callbacks must not remove another callback's published mapping.
+func (t *stateTable) releaseIfUnmapped(requestID string) {
+	t.releaseEntry(requestID, true)
+}
+
+func (t *stateTable) releaseEntry(requestID string, onlyUnmapped bool) {
 	t.mu.Lock()
+	if t.redirect != nil {
+		next := t.redirect
+		t.mu.Unlock()
+		next.releaseEntry(requestID, onlyUnmapped)
+		return
+	}
 	defer t.mu.Unlock()
 	state, ok := t.entries[requestID]
 	if !ok {
 		return
+	}
+	if onlyUnmapped {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.mapping != nil {
+			return
+		}
 	}
 	delete(t.entries, requestID)
 	if state.admitted {
@@ -200,6 +253,11 @@ func (t *stateTable) release(requestID string) {
 
 func (t *stateTable) activeCount() int {
 	t.mu.Lock()
+	if t.redirect != nil {
+		next := t.redirect
+		t.mu.Unlock()
+		return next.activeCount()
+	}
 	defer t.mu.Unlock()
 	return t.active
 }
@@ -243,20 +301,16 @@ func (t *stateTable) takeOverFrom(other *stateTable) {
 		return
 	}
 	other.mu.Lock()
-	other.redirect = t
-	taken := other.entries
-	other.entries = make(map[string]*requestState)
-	other.mu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	active := 0
-	for _, state := range taken {
-		if state.admitted {
-			active++
-		}
-	}
-	t.entries = taken
-	t.active = active
+	defer other.mu.Unlock()
+	// Finish installing entries before any old callback can follow redirect.
+	// Otherwise it could acquire in the new table and have its entry overwritten.
+	t.entries = other.entries
+	t.active = other.active
+	other.entries = make(map[string]*requestState)
+	other.active = 0
+	other.redirect = t
 }
 
 func (t *stateTable) setLimits(maxActive, maxItems int, ttl time.Duration) {

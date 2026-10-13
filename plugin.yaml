@@ -2,10 +2,10 @@
 # from the shared library filename; it does not read this file.
 id: privacygateway
 name: Privacy Gateway
-version: 0.1.0
+version: 0.1.3
 type: shared-library
 platform: linux/amd64
-library: plugins/linux/amd64/privacygateway-v0.1.0.so
-package: privacygateway_0.1.0_linux_amd64.zip
+library: privacygateway-v0.1.3.so
+package: privacygateway_0.1.3_linux_amd64.zip
 repository: https://github.com/bactdt/cpa-privacygateway
 license: MIT

@@ -79,24 +79,13 @@ func (p *plugin) InterceptRequestBeforeAuth(ctx context.Context, req pluginapi.R
 		if blocked := p.guardRequest(cfg, req); blocked != nil {
 			return *blocked, nil
 		}
-		return p.redactRequestWithExistingState(cfg, detector, req)
+		return p.redactRequestWithState(cfg, detector, req, false)
 	}
 	if blocked := p.guardRequest(cfg, req); blocked != nil {
-		p.states.release(req.RequestID)
+		p.states.releaseIfUnmapped(req.RequestID)
 		return *blocked, nil
 	}
-	format := strings.TrimSpace(req.SourceFormat)
-	if format != "" {
-		p.states.setFormat(req.RequestID, format)
-	}
-	if !supportedFormats[format] {
-		if cfg.failClosed() && format != "" {
-			p.states.release(req.RequestID)
-			return terminate(http.StatusUnsupportedMediaType, "invalid_request_error", "request format is not supported by privacy gateway", nil)
-		}
-		return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body}, nil
-	}
-	return p.redactInterceptRequest(cfg, detector, format, req, true)
+	return p.redactRequestWithState(cfg, detector, req, true)
 }
 
 func (p *plugin) handleEmptyRequestID(ctx context.Context, cfg config, detector redact.Config, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
@@ -122,33 +111,33 @@ func (p *plugin) handleEmptyRequestID(ctx context.Context, cfg config, detector 
 	return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: redacted}, nil
 }
 
-func (p *plugin) redactRequestWithExistingState(cfg config, detector redact.Config, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
-	format := strings.TrimSpace(req.SourceFormat)
+func (p *plugin) redactRequestWithState(cfg config, detector redact.Config, req pluginapi.RequestInterceptRequest, ownsEntry bool) (pluginapi.RequestInterceptResponse, error) {
 	state := p.states.get(req.RequestID)
 	if state == nil {
 		return p.InterceptRequestBeforeAuth(context.Background(), req)
 	}
-	stateFormat := state.getFormat()
-	stateMapping := state.getMapping()
-	if stateFormat != "" && format != "" && stateFormat != format {
+	format, consistent := state.useFormat(strings.TrimSpace(req.SourceFormat))
+	if !consistent {
 		return terminate(http.StatusBadRequest, "invalid_request_error", "request id reused with inconsistent source format", nil)
 	}
-	if stateMapping == nil {
-		if format == "" {
-			format = stateFormat
+	if !supportedFormats[format] {
+		if cfg.failClosed() && format != "" {
+			if ownsEntry {
+				p.states.releaseIfUnmapped(req.RequestID)
+			}
+			return terminate(http.StatusUnsupportedMediaType, "invalid_request_error", "request format is not supported by privacy gateway", nil)
 		}
-		// 复用条目不释放：首请求可能仍在途，失败只影响本次正文（TD-CPA-034）。
-		return p.redactInterceptRequest(cfg, detector, format, req, false)
+		return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body}, nil
+	}
+	stateMapping := state.getMapping()
+	if stateMapping == nil {
+		return p.redactInterceptRequest(cfg, detector, format, req, ownsEntry)
 	}
 	if len(req.Body) == 0 {
 		return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body}, nil
 	}
-	walkFormat := stateFormat
-	if walkFormat == "" {
-		walkFormat = format
-	}
-	opts := redact.WalkOptions{Format: walkFormat, RedactToolArguments: cfg.RedactToolArguments}
-	redacted, count, err := redact.RedactJSON(walkFormat, req.Body, stateMapping, detector, opts)
+	opts := redact.WalkOptions{Format: format, RedactToolArguments: cfg.RedactToolArguments}
+	redacted, count, err := redact.RedactJSON(format, req.Body, stateMapping, detector, opts)
 	if err != nil {
 		// 已有状态条目属于在途请求，失败时不得释放（首请求可能仍在途，TD-CPA-034）。
 		return p.redactFailure(cfg, err, req)
@@ -169,7 +158,7 @@ func (p *plugin) redactInterceptRequest(cfg config, detector redact.Config, form
 	mapping, err := redact.NewMapping(cfg.MaxMappings, cfg.MaxMappingBytes)
 	if err != nil {
 		if ownsEntry {
-			p.states.release(req.RequestID)
+			p.states.releaseIfUnmapped(req.RequestID)
 		}
 		if cfg.failClosed() {
 			return terminate(http.StatusInternalServerError, "server_error", "privacy gateway mapping unavailable", nil)
@@ -180,14 +169,35 @@ func (p *plugin) redactInterceptRequest(cfg config, detector redact.Config, form
 	redacted, count, err := redact.RedactJSON(format, req.Body, mapping, detector, opts)
 	if err != nil {
 		if ownsEntry {
-			p.states.release(req.RequestID)
+			p.states.releaseIfUnmapped(req.RequestID)
 		}
 		return p.redactFailure(cfg, err, req)
 	}
 	if count == 0 {
 		return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body}, nil
 	}
-	p.states.setMapping(req.RequestID, mapping)
+	ownedMapping, installed := p.states.setMapping(req.RequestID, mapping)
+	if ownedMapping == nil {
+		if ownsEntry {
+			p.states.releaseIfUnmapped(req.RequestID)
+		}
+		if cfg.failClosed() {
+			return terminate(http.StatusInternalServerError, "server_error", "privacy gateway mapping unavailable", nil)
+		}
+		return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body}, nil
+	}
+	if installed || ownedMapping == mapping {
+		return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: redacted}, nil
+	}
+	// Another callback won the first-mapping race. Re-run against the winner so
+	// the response can always be restored from the mapping held in the table.
+	redacted, count, err = redact.RedactJSON(format, req.Body, ownedMapping, detector, opts)
+	if err != nil {
+		return p.redactFailure(cfg, err, req)
+	}
+	if count == 0 {
+		return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body}, nil
+	}
 	return pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: redacted}, nil
 }
 
@@ -207,18 +217,20 @@ func (p *plugin) InterceptRequestAfterAuth(ctx context.Context, req pluginapi.Re
 			return terminate(http.StatusTooManyRequests, "rate_limit_exceeded", "privacy gateway concurrency limit reached", http.Header{"Retry-After": {"1"}})
 		}
 		if blocked := p.guardRequest(cfg, req); blocked != nil {
-			p.states.release(req.RequestID)
+			if !existed {
+				p.states.releaseIfUnmapped(req.RequestID)
+			}
 			return *blocked, nil
 		}
 		if existed {
-			return p.redactRequestWithExistingState(cfg, detector, req)
+			return p.redactRequestWithState(cfg, detector, req, false)
 		}
-		return p.redactAfterAuthWithoutState(cfg, detector, req)
+		return p.redactRequestWithState(cfg, detector, req, true)
 	}
 	if blocked := p.guardRequest(cfg, req); blocked != nil {
 		return *blocked, nil
 	}
-	return p.redactRequestWithExistingState(cfg, detector, req)
+	return p.redactRequestWithState(cfg, detector, req, false)
 }
 
 // guardRequest 对每个请求正文统一执行关键词拦截与大小上限检查，
@@ -243,16 +255,6 @@ func (p *plugin) guardRequest(cfg config, req pluginapi.RequestInterceptRequest)
 		}
 	}
 	return nil
-}
-
-// redactAfterAuthWithoutState 处理 after-auth 阶段没有状态条目的请求：
-// 创建映射并完整脱敏，命中时写回状态表，保证 after-auth 新增的敏感值不会原文外发。
-func (p *plugin) redactAfterAuthWithoutState(cfg config, detector redact.Config, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
-	format := strings.TrimSpace(req.SourceFormat)
-	if format == "" || !supportedFormats[format] || len(req.Body) == 0 {
-		return p.InterceptRequestBeforeAuth(context.Background(), req)
-	}
-	return p.redactInterceptRequest(cfg, detector, format, req, true)
 }
 
 func (p *plugin) InterceptResponse(ctx context.Context, req pluginapi.ResponseInterceptRequest) (pluginapi.ResponseInterceptResponse, error) {

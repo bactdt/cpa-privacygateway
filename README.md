@@ -26,23 +26,21 @@ CLIProxyAPI（CPA）的隐私脱敏动态库插件。插件在请求发送到上
 https://raw.githubusercontent.com/bactdt/cpa-privacygateway/main/plugin.json
 ```
 
-手动安装时必须在 CPA 工作目录解压，而不是在 `plugins/linux/amd64` 目录内再次解压：
+商店安装器会自动把根目录动态库写入 CPA 的插件目录。手动安装时，先在临时目录解压，再把动态库放入 CPA 插件目录：
 
 ```sh
 cd /path/to/CPA
-unzip privacygateway_0.1.3_linux_amd64.zip
+mkdir -p /tmp/privacygateway-0.1.3
+unzip privacygateway_0.1.3_linux_amd64.zip -d /tmp/privacygateway-0.1.3
+(cd /tmp/privacygateway-0.1.3 && sha256sum -c privacygateway/checksums.txt)
+install -D -m 0755 /tmp/privacygateway-0.1.3/privacygateway-v0.1.3.so \
+  plugins/linux/amd64/privacygateway-v0.1.3.so
 ```
 
 CPA 插件商店安装器会将动态库写入：
 
 ```text
 plugins/linux/amd64/privacygateway-v0.1.3.so
-```
-
-手动安装后可校验包：
-
-```sh
-sha256sum -c privacygateway/checksums.txt
 ```
 
 ## 配置
