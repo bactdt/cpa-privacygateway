@@ -14,7 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-const pluginVersion = "0.1.3"
+const pluginVersion = "0.1.4"
 
 var supportedFormats = map[string]bool{
 	"openai":          true,
