@@ -16,6 +16,9 @@ type WalkOptions struct {
 	Format              string
 	RedactToolArguments bool
 	MaxDepth            int
+	// OnFinding 非 nil 时，RedactJSON 每写入一个占位符回调一次（需求 4.1）；
+	// 为 nil 时不调用 MaskPreview/RenderPath，输出与未接线时逐字节相同（需求 4.4）。
+	OnFinding FindingSink
 }
 
 type replacement struct {
@@ -86,7 +89,7 @@ func RedactJSON(format string, body []byte, m *Mapping, cfg Config, opts WalkOpt
 	}
 	visitor := func(path []string, toolArg, arrayText bool, value string) (string, bool, error) {
 		if toolArg {
-			replaced, count, err := m.Redact(value, 0, cfg)
+			replaced, count, err := m.RedactObserved(value, 0, cfg, path, opts.OnFinding)
 			if err != nil {
 				return "", false, err
 			}
@@ -102,7 +105,7 @@ func RedactJSON(format string, body []byte, m *Mapping, cfg Config, opts WalkOpt
 		if !textKeys[key] && !arrayText {
 			return "", false, nil
 		}
-		replaced, count, err := m.Redact(value, 0, cfg)
+		replaced, count, err := m.RedactObserved(value, 0, cfg, path, opts.OnFinding)
 		if err != nil {
 			return "", false, err
 		}

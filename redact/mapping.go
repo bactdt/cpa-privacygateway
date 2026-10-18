@@ -77,8 +77,15 @@ func newNonce() (string, error) {
 	return hex.EncodeToString(buffer), nil
 }
 
-func (m *Mapping) Nonce() string {
-	return m.nonce
+// hasRaw 报告原值是否已有映射（Reused 判定，需求 4.3）。
+func (m *Mapping) hasRaw(raw string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.rawToPh[raw]
+	return ok
+}
+
+func (m *Mapping) Nonce() string {	return m.nonce
 }
 
 func (m *Mapping) Size() int {
@@ -116,6 +123,20 @@ func (m *Mapping) Placeholder(raw string) (string, error) {
 }
 
 func (m *Mapping) Redact(text string, base int, cfg Config) (string, int, error) {
+	return m.redact(text, base, cfg, nil, nil)
+}
+
+// RedactObserved 与 Redact 执行完全相同的替换；当 sink 非 nil 时，每写入一个
+// 占位符回调一次，参数含 Kind、Placeholder、Preview、Path、Reused（需求 4.1–4.3）。
+// sink panic 在本包内恢复，返回值与 sink 为 nil 时一致（需求 4.5）。
+func (m *Mapping) RedactObserved(text string, base int, cfg Config, path []string, sink FindingSink) (string, int, error) {
+	if sink == nil {
+		return m.redact(text, base, cfg, nil, nil)
+	}
+	return m.redact(text, base, cfg, path, sink)
+}
+
+func (m *Mapping) redact(text string, base int, cfg Config, path []string, sink FindingSink) (string, int, error) {
 	raw, truncated := cfg.Detect(text, base, nil)
 	spans := resolveSpans(raw)
 	if truncated {
@@ -139,6 +160,7 @@ func (m *Mapping) Redact(text string, base int, cfg Config) (string, int, error)
 			continue
 		}
 		raw := text[start:end]
+		reused := m.hasRaw(raw)
 		placeholder, err := m.Placeholder(raw)
 		if err != nil {
 			return "", 0, err
@@ -147,9 +169,24 @@ func (m *Mapping) Redact(text string, base int, cfg Config) (string, int, error)
 		builder.WriteString(placeholder)
 		cursor = end
 		count++
+		if sink != nil {
+			emitFinding(sink, Finding{
+				Kind:        item.kind,
+				Placeholder: placeholder,
+				Preview:     MaskPreview(item.kind, raw),
+				Path:        RenderPath(path),
+				Reused:      reused,
+			})
+		}
 	}
 	builder.WriteString(text[cursor:])
 	return builder.String(), count, nil
+}
+
+// emitFinding 恢复 sink panic，保证观测旁路不改变脱敏结果（需求 4.5）。
+func emitFinding(sink FindingSink, f Finding) {
+	defer func() { _ = recover() }()
+	sink(f)
 }
 
 func (m *Mapping) Restore(text string) string {
