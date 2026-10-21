@@ -185,6 +185,7 @@
 2. THE Management_Handler SHALL 以仅含 `Method`、`Path`、`Description` 三个字段的形式编码每条管理路由，使 `Menu` 与 `Handler` 不出现在注册响应中。
 3. WHEN Host 调用 `management.register`，THE Management_Handler SHALL 返回唯一一条资源路由 `{Path:"trace", Menu:"隐私脱敏日志"}`，替换原 `panel` 资源路由。
 4. THE Trace_Data_Route SHALL 使用 `/v0/management/privacygateway/traces` 路径，位于 Host 管理鉴权前缀 `/v0/management/` 下且不在 Host 的 `/v0/management/plugins/` 参数路由树下。
+5. WHERE `panel.enabled` 或 `trace_enabled` 为 false（TD-11 可见性联动），THE Plugin SHALL 不声明 `capabilities.management_api`，`management.register` SHALL 返回空 `routes` 与 `resources`，且 Trace_Page_Route 与 Trace_Data_Route SHALL 返回 404。
 
 ### Requirement 11: 追踪数据查询与响应结构
 
@@ -203,7 +204,7 @@
 9. THE Management_Handler SHALL 为 Trace_Data_Route 响应设置 `Content-Type: application/json; charset=utf-8`、`Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`。
 10. WHEN Trace_Data_Route 收到 DELETE 请求，THE Management_Handler SHALL 清空 Trace_Buffer 并返回 200 与 `{"cleared":n}`，n 为清空前的记录数。
 11. IF Trace_Data_Route 收到 GET 与 DELETE 以外的方法，THEN THE Management_Handler SHALL 返回 405 与 `Allow: GET, DELETE`。
-12. WHILE `trace_enabled` 为 false，THE Management_Handler SHALL 在 GET 响应中返回 `trace_enabled: false` 与空的 `requests`。
+12. WHERE `trace_enabled` 为 false，THE 管理通道 SHALL 按 TD-11 不可达（`management_api` 不声明、数据路由 404）；`trace_enabled` 字段保留在响应结构中，可达时恒为 true。
 
 ### Requirement 12: 管理分发与数据隔离
 
@@ -262,7 +263,7 @@
 4. WHEN Trace_Record 含 after_auth 事件，THE Trace_Page SHALL 按 `attempt` 分组显示"第 n 次凭据尝试"，并汇总新增项数与复用项数。
 5. WHILE 未输入管理密钥，THE Trace_Page SHALL 显示"请输入 CPA 管理密钥"。
 6. WHILE 已连接且 `requests` 为空，THE Trace_Page SHALL 显示"暂无请求。请通过 CPA 发送一次模型请求，再回到此页"。
-7. WHILE GET 响应中 `trace_enabled` 为 false，THE Trace_Page SHALL 显示"追踪已关闭：在配置中设置 `trace_enabled: true`"。
+7. IF `panel.enabled` 或 `trace_enabled` 为 false（TD-11），THEN THE Trace_Page SHALL 返回 404 不可达；页面 SHALL 保留对 GET 响应 `trace_enabled: false` 的防御性提示渲染（"追踪已关闭：在配置中设置 `trace_enabled: true`"）。
 8. WHILE GET 响应中插件 `enabled` 为 false，THE Trace_Page SHALL 显示"插件总开关关闭，请求不会被脱敏，也不会被记录"。
 9. WHEN 用户点击"清空日志"，THE Trace_Page SHALL 先请求二次确认，确认后发送 DELETE，成功后清空本地列表并将 `since` 重置为 0。
 10. THE Trace_Page SHALL 用颜色区分终止或失败（红）、fail_open 放行（橙）、正常（绿）与信息（灰），并同时显示图标与文字。

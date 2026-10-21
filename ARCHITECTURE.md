@@ -30,12 +30,13 @@ redact 领域层：检测 → 占位符映射 → 响应/流还原
 ```text
 入口层 (main 包)      →   领域层 (redact 包)
 abi.go / plugin.go          detect.go  (检测)
-management.go（管理资源路由/内嵌面板）
-state.go / config.go        mapping.go (占位符映射)
-main.go                     walk.go    (JSON 遍历替换)
-shared_library_*.go         jsonedit.go (JSON 字符串定点编辑)
-                            stream.go / stream_payload.go / stream_text.go (流式还原、形态分派、文本流暂扣)
-                            stream_openai.go / stream_claude.go / stream_gemini.go / stream_responses.go (协议规划器)
+management.go (资源/数据路由) mapping.go (占位符映射)
+management_trace.go          walk.go    (JSON 遍历替换)
+state.go / config.go         jsonedit.go (JSON 字符串定点编辑)
+metadata.go / abi_envelope.go finding.go  (Finding/MaskPreview，观测旁路数据形状)
+trace.go / trace_hooks.go    stream.go / stream_payload.go / stream_text.go (流式还原、形态分派、文本流暂扣)
+main.go                      stream_openai.go / stream_claude.go / stream_gemini.go / stream_responses.go (协议规划器)
+shared_library_*.go
 ```
 
 **依赖方向规则（强制）**：
@@ -85,6 +86,19 @@ janitor（每分钟）                      → 清理 TTL 过期条目
 流结束                                  → 残留在协议结束信号处投递；结束信号前中断时 request.complete 的 Flush 计入 StreamStats.Leftover 后丢弃（SDK 无终块通道，TD-CPA-032 残留）
 ```
 
+### 3.4 观测旁路（RT-1 追踪，只读不干预）
+
+```text
+redact 检测命中  → Finding{Kind, Path, Count, Preview}   Preview = MaskPreview(原值)，原值不出 redact
+                     → WalkOptions.OnFinding 收集器（nil 即零成本旁路）
+trace_hooks.go     → Trace_Buffer 环形缓冲（trace_max_requests × trace_max_events，仅内存）
+   四拦截器挂钩      → 阶段事件（request.before_auth/after_auth/response.restored/stream.* 等）
+   HandleRequestComplete → duration_ms / outcome 落账 + 冲刷
+GET/DELETE /v0/management/privacygateway/traces → 页面轮询（不落宿主日志，RT-3）
+```
+
+旁路原则：观测失败（panic/超限/丢弃）不得改变拦截器返回值与脱敏结果；`trace_enabled=false` 时缓冲清空且入口单次开关读取即返回（架构不变量 R-1/R-2 不受影响：`redact` 仍不反向依赖 `main`，收集器经回调注入）。
+
 ## 4. 关键不变量
 
 | 编号 | 不变量 | 位置 |
@@ -95,7 +109,8 @@ janitor（每分钟）                      → 清理 TTL 过期条目
 | I-4 | 状态表条目受 TTL 约束：空闲超 TTL 可被驱逐，admitted 在途条目保留至 2×TTL 后强制回收；满表全在途拒绝新准入；重配/重新注册移交在途状态 | `state.go` |
 | I-5 | Mapping 与 StreamRestorer 内部互斥；数组文本上下文只作用于直接字符串元素，不穿过对象子树 | `redact/mapping.go`、`redact/stream.go`、`redact/walk.go` |
 | I-6 | ABI 层单次调用受 `maxCGoBytesLen` 约束 | `abi.go` |
-| I-7 | management.* 分派先于 beginPluginCall 与 fail-closed 路径，与插件配置/注册状态无关；shutdown 后拒绝；handler 内 panic 必须被 recover，避免宿主熔断插件 | `management.go`、`abi.go` |
+| I-7 | management.* 分派先于 beginPluginCall 与 fail-closed 路径；可达性由注册态双开关联动（`panel.enabled && trace_enabled`，TD-11），关闭即不声明 management_api 且 404；shutdown 后拒绝；handler 内 panic 必须被 recover，避免宿主熔断插件 | `management.go`、`management_trace.go`、`abi.go` |
+| I-8 | 追踪事件只含掩码预览（`MaskPreview`），原值不出 `redact`；缓冲仅内存、有界，观测路径的任何失败不改变拦截器返回值 | `redact/finding.go`、`redact/mapping.go`、`trace.go`、`trace_hooks.go` |
 
 ## 5. 目标态与差距
 

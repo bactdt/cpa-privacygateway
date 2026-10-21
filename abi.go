@@ -150,7 +150,7 @@ var abiState = struct {
 	// 从未注册过时为零值 false（面板关闭），与历史默认行为一致。
 	panelEnabled bool
 	// traceEnabled 保存最近一次成功注册配置的 trace_enabled 取值。
-	// 管理可见性 = panelEnabled && traceEnabled（TD-6 联动语义）。
+	// 管理可见性 = panelEnabled && traceEnabled（TD-11 联动语义）。
 	traceEnabled bool
 }{}
 

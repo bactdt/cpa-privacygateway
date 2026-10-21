@@ -1,6 +1,6 @@
 # 请求脱敏追踪日志计划
 
-> 日期：2026-10-11。状态：**需求阶段完成**（`.kiro/specs/request-trace-log/design.md` 与 `requirements.md` 已完成；tasks.md 未生成；未改源码）。
+> 日期：2026-10-11。状态：**实现完成，待真实宿主验收**（2026-10-21；`.kiro/specs/request-trace-log/` 规格 + 源码 + 测试 + 交付物冒烟全部完成；tasks.md 未生成（直接按阶段提交推进））。
 
 ## 1. 已确认决策（用户，2026-10-11）
 
@@ -26,6 +26,7 @@
 | TD-8 | 记录宿主 `TraceID`，用于对照 gin 日志 |
 | TD-9 | `pluginMetadata` 从 `abi.go`（499 行）迁到 `metadata.go` |
 | TD-10 | 流式统计来源为 `stream-restore-bare-chunks` 的计数接口；不改 `redact/stream.go` 与 `InterceptStreamChunk` 的还原逻辑 |
+| TD-11 | 管理可见性联动：`management_api` 能力、资源/数据路由可达性 = `panel.enabled` **且** `trace_enabled`；任一关闭即不声明能力并 404（2026-10-21 实施阶段确认，已回写 requirements/design，替代原"trace_enabled=false 时页面可达并显示关闭提示"的描述） |
 
 ## 3. 依赖
 
@@ -43,8 +44,9 @@
 
 | 项 | 状态 |
 |---|---|
-| design.md | 已完成（2026-10-11；同日按流式协调修订，属性已回填需求编号） |
-| requirements.md | 已完成（2026-10-11，22 条需求） |
-| tasks.md | 未开始 |
-| 实现与测试 | 未开始 |
-| 真实宿主验收 | 未开始 |
+| design.md | 已完成（2026-10-11；同日按流式协调修订，属性已回填需求编号；2026-10-21 回写 TD-11 联动偏差） |
+| requirements.md | 已完成（2026-10-11，22 条需求；2026-10-21 按 TD-11 回写 R11.12/R15.7 可见性条款） |
+| tasks.md | 未生成（以 `docs/exec-plans/active/request-trace-log.md` 分阶段提交代替） |
+| 实现与测试 | 已完成（2026-10-21）：阶段 1 掩码/观测/计数（`redact/finding.go`、`restore_stats.go`）、阶段 2 缓冲与阶段 hook（`trace.go`、`trace_hooks.go` + 拦接线）、阶段 3 生命周期与配置（`config.go`、`abi.go`）、阶段 4 管理路由与页面（`management_trace.go`）、阶段 5 打包/冒烟/配置样例、阶段 6 文档同步 |
+| 交付物冒烟 | 已完成（`make smoke` 与 `make smoke-panel`：路由注册、资源通道取数据 404、完整管理路径 GET 含 `redact.done` 且不含原值、DELETE `cleared`） |
+| 真实宿主验收 | 未开始（需用户执行：Requirement 22） |

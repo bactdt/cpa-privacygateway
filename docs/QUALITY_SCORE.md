@@ -37,14 +37,15 @@
 
 | 指标 | 当前 | 目标/下一步 |
 |---|---|---|
-| 报告整体覆盖率 | 87.44%（2026-10-13 报告，并发修正后） | 保持 >=70%，变更后重新生成 |
-| redact 包 | 91.67% | 保持 >=80%，增加安全失败用例 |
-| 主包 | 80.1%（含 abi.go；2026-10-13 报告；面板关闭后 200/405 分支不从 handler 入口触达，开启分支由 TestManagementPanelEnabledByConfig 覆盖） | 优先补 ABI cgo 路径，不用重复用例凑覆盖率 |
+| 报告整体覆盖率 | 89.32%（2026-10-21 `make coverage`，RT-1 追踪落地后） | 保持 >=70%，变更后重新生成 |
+| redact 包 | 92.31% | 保持 >=80%，增加安全失败用例 |
+| 主包 | 可见性联动分支由 `TestManagementVisibleRequiresBothSwitches` 覆盖；C 路径不可从 Go 测试触发 | 优先补 ABI cgo 路径，不用重复用例凑覆盖率 |
 | 门禁 | `make check` 含 -race；`make vulncheck` 独立目标；fuzz×3 + benchmark×3 已入库 | fuzz 纳入 CI 定期执行 |
 | 复杂度 | walkValue、Detect 热点按已有处置保留 | 不把历史行数下降当作当前自动度量结果 |
 | 技术债 | 51 项：41 fixed、3 declined、7 open（020/022 均已 benchmark 并登记保留决策；046–050 为流式还原已知限制；051 面板开关配置化已修复） | P0 全部清零（043 max_findings 超限 fail-closed 闭合）；044 ABI 层 panic/不可用 fail-closed 终止信封闭合；018 白名单重建、017 语义终版 |
 | 隐私闭环 | 本轮同 ID 映射/格式、after-auth 准入、热重载交错已有 Go 层回归证据；超时回收仍可能丢映射 | 新版本真实宿主联调另行验证，不据此宣称零漏报/零并发缺陷 |
-| 端到端 | 已有交付物 C 加载冒烟（`make smoke`：dlopen→init→register→脱敏→管理接口（面板关闭返回 404/空 resources）→shutdown，对 zip 根目录解压后的 .so 通过；`make smoke-panel` 按 `panel.enabled=true` 路径验证 200/HTML）和 CPA 管理界面内嵌页面（management.register/handle，单元测试覆盖；面板由 `panel.enabled` 控制、默认关闭） | 用户真实 CPA 宿主已验收脱敏、流式与非流式还原（2026-10-11，用户执行）；请求日志页未实现 |
+| 可观测性（RT-1 追踪） | 仅内存环形缓冲 + 掩码预览事件流；`GET/DELETE /v0/management/privacygateway/traces` 与 `trace` 页面（trace.html，Bearer+增量轮询）；单元/契约测试与 `make smoke`（数据路由、原值不回显、cleared）通过 | 真实 CPA 宿主验收 trace 页（菜单「隐私脱敏日志」、200 页面、GET 含 `redact.done`）；RT-2 宿主日志关联与 RT-3 流式详情另立计划 |
+| 端到端 | 已有交付物 C 加载冒烟（`make smoke`：dlopen→init→register→脱敏→管理接口（可见性关闭返回 404/空 routes/resources；双开关开启时 routes 含完整 traces 路径）→shutdown，对 zip 根目录解压后的 .so 通过；`make smoke-panel` 按双开关开启路径验证页面 200/HTML、数据 GET 含 `redact.done` 且不含原值、DELETE 返回 `cleared`） | 用户真实 CPA 宿主已验收脱敏、流式与非流式还原（2026-10-11，用户执行）；trace 日志页已实现（2026-10-21），待真实宿主验收 |
 
 ## 4. 复算方式
 

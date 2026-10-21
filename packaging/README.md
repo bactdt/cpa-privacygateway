@@ -45,10 +45,15 @@ CLIProxyAPI（CPA）隐私脱敏网关插件：请求发往上游前把凭据与
 `/v0/management/privacygateway/traces` 均返回 404。需要排障时在配置中设
 `panel.enabled: true`（并保持 `trace_enabled: true`）后重启 CPA：
 
-- `GET /v0/resource/plugins/privacygateway/trace`：内嵌追踪页面（嵌入动态库，GET-only）。
-- `GET /v0/management/privacygateway/traces?since=&limit=&filter=`：内存中的请求级脱敏事件快照
-  （JSON，仅掩码信息，不含原值）；`DELETE` 同路径清空缓冲。
+- `GET /v0/resource/plugins/privacygateway/trace`：内嵌追踪页面（菜单「隐私脱敏日志」，嵌入动态库，GET-only）。
+- `GET /v0/management/privacygateway/traces?since=&limit=`：内存中的请求级脱敏事件快照
+  （JSON，仅掩码信息，不含原值）；`limit` 范围 1..`trace_max_requests`（越界回退 50）；
+  `DELETE` 同路径清空缓冲，返回 `{"cleared":n}`。
 - 页面可见性 = `panel.enabled` 且 `trace_enabled`；数据缓冲仅内存、重启即清空。
+
+追踪相关配置（全部可省略）：`trace_enabled`（默认 `true`）、`trace_max_requests`（默认 `200`，范围 1..2000）、
+`trace_max_events`（默认 `64`，范围 8..256，单请求事件上限，Finding 明细上限 64）。
+最坏情形内存约 6 MiB（200 请求 × 64 事件的仅内存环形缓冲）；`trace_enabled: false` 清空缓冲并隐藏管理页面。
 
 包内 `panel.html` 保留为 file:// 本地排障用的旧版检测面板，不随插件注册。
 

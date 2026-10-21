@@ -35,17 +35,20 @@ make check        # 本地门禁总入口（fmt-check + vet + build + lint + tes
 | 路径 | 职责 |
 |---|---|
 | `abi.go` | C ABI 导出、RPC 方法分发、注册/重配、能力声明、宿主日志回调 |
-| `management.go` | 管理资源路由：内嵌 panel.html，处理 management.register/handle |
+| `management.go` | 管理注册与分发骨架：内嵌 trace.html，capabilities/routes 可见性联动（TD-11） |
+| `management_trace.go` | `/v0/management/privacygateway/traces` 数据路由（GET/DELETE）、查询解析与 trace 页面路由 |
 | `plugin.go` | 四个拦截器 + 请求完成清理 + 并发/关键词/失败策略 |
 | `state.go` | 请求级状态表（映射、流恢复器、准入计数、TTL 清理） |
-| `config.go` | 插件配置解析与默认值 |
+| `config.go` | 插件配置解析与默认值（含 trace_* 开关/上限） |
+| `metadata.go` | 插件元数据与 ConfigFields（自 abi.go 迁出） |
+| `trace.go` / `trace_hooks.go` | 内存环形追踪缓冲与四拦截器阶段挂钩（仅内存、掩码预览） |
 | `main.go` | c-shared 必需的 `main` 占位 |
 | `shared_library_*.go` | 按平台取自身共享库路径 |
-| `redact/` | **纯领域层**：检测、映射、JSON 遍历、流式还原 |
+| `redact/` | **纯领域层**：检测、映射、JSON 遍历、流式还原、Finding/MaskPreview（观测旁路数据形状） |
 | `internal/archtest/` | 结构测试：强制分层依赖方向 |
 | `scripts/lint/` | 自定义 linter（T1/T2/T6） |
 | `scripts/covercheck/` | 覆盖率下限校验 |
-| `scripts/package/`、`packaging/` | 插件 zip 打包器、包内 README 模板、`panel.html` 本地检测面板 |
+| `scripts/package/`、`packaging/` | 插件 zip 打包器、包内 README 模板、`trace.html`（内嵌管理页）、`panel.html`（仅随 zip 分发的 file:// 排障页） |
 | `scripts/smoke/` | cgo 宿主模拟器：加载解压后的 .so 做交付物冒烟 |
 | `docs/` | 设计文档、执行计划、技术债、CI 决策 |
 

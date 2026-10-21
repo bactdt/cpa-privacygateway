@@ -27,6 +27,7 @@
 | TD-8 | 关联宿主日志 | 记录宿主下发的 `TraceID`（8 位十六进制，即 gin 日志中的 `[f2fd6250]`） | 宿主源码确认拦截与完成回调都会填充（见 6.2） |
 | TD-9 | `pluginMetadata` 迁移 | 从 `abi.go` 移到新文件 `metadata.go` | `abi.go` 已 499 行；腾出约 17 行给必要的单行挂钩 |
 | TD-10 | 流式统计来源 | 只消费 `stream-restore-bare-chunks` 提供的计数接口；不修改 `redact/stream.go` 与 `InterceptStreamChunk` 的还原逻辑 | 2026-10-11 发现流块全丢缺陷，由独立 bugfix 规格修复并替换流式 API，避免两个规格改同一处 |
+| TD-11 | 管理可见性联动 | 管理能力声明与页面/数据路由可达性 = `panel.enabled` **且** `trace_enabled`；任一关闭即 `management_api=false`、空 routes/resources、页面与数据均 404 | 2026-10-21 实施阶段用户确认的偏差：替代原"trace_enabled=false 时页面可达并显示关闭提示"的描述（已回写 requirements R10/R11/R15 与本文档 §5/故障表）；关闭追踪后页面无数据可看，404 比空态更明确，也少一个可达入口 |
 
 非目标：持久化到磁盘、写宿主日志、导出/下载日志、跨进程或多实例聚合、修改脱敏算法、修改宿主或管理中心前端、展示请求/响应正文片段。
 
@@ -296,6 +297,8 @@ after_auth 说明：宿主每次凭据尝试都会调用 after_auth。已有状�
 
 ### 4. 入口层：`management.go` 与 `management_trace.go`
 
+**可见性联动（TD-11，2026-10-21 回写）**：`plugin.register` 的 `capabilities.management_api`、`management.register` 的 routes/resources、`management.handle` 的页面与数据可达性，全部取 `panel.enabled` **且** `trace_enabled`；任一为 false 时分别声明为 false、返回空表、返回 404。响应字段 `trace_enabled` 保留在 `traces` 线格式中（可达时恒为 true）。
+
 `management.register` 响应：
 
 ```go
@@ -380,7 +383,7 @@ type abiManagementRoute struct {
 - **渲染安全**：只用 `textContent` / `createElement`，不用 `innerHTML`；模型名、占位符等一律当文本。
 - **颜色语义**：终止/失败为红、fail_open 放行为橙、正常为绿、信息为灰；颜色之外同时使用图标与文字（不只靠颜色传达状态）。
 - **可访问性**：所有输入有 `<label>`；请求条目为 `<details>/<summary>`，可用键盘展开；状态区 `role="status" aria-live="polite"`；错误区 `role="alert"`；焦点样式可见；对比度目标 WCAG AA（需人工复核）。
-- **空态提示**：无密钥时"请输入 CPA 管理密钥"；已连接但无记录时"暂无请求。请通过 CPA 发送一次模型请求，再回到此页"；`trace_enabled=false` 时"追踪已关闭：在配置中设置 `trace_enabled: true`"；插件 `enabled=false` 时"插件总开关关闭，请求不会被脱敏，也不会被记录"。
+- **空态提示**：无密钥时"请输入 CPA 管理密钥"；已连接但无记录时"暂无请求。请通过 CPA 发送一次模型请求，再回到此页"；插件 `enabled=false` 时"插件总开关关闭，请求不会被脱敏，也不会被记录"。（`trace_enabled=false` 时页面按 TD-11 直接 404 不可达；页面仍保留对响应字段 `trace_enabled: false` 的防御性提示分支。）
 - **清空**：二次确认后 `DELETE`，成功后清空本地列表并重置 `since`。
 - **密钥存储**（TD-7）：默认只放 JS 变量；勾选后写 `sessionStorage["privacygateway.managementKey"]`；取消勾选立即删除。请求头使用 `Authorization: Bearer <key>`。
 
@@ -649,7 +652,7 @@ type traceRecord struct {
 | 明细超限 | 只计数，`findings_truncated++` |
 | `trace_*` 配置越界 | `parseConfig` 返回错误；初次注册失败、重配保留旧配置（与现有字段一致） |
 | 重配缩小 `trace_max_requests` | `configure` 淘汰最旧记录直至满足新上限 |
-| `trace_enabled=false` | 清空缓冲；GET 返回 `trace_enabled:false` 与空列表；页面显示关闭提示 |
+| `trace_enabled=false` | 清空缓冲；管理可见性联动（TD-11）：`management_api` 不声明、页面与数据路由 404；GET 响应的 `trace_enabled` 字段在可达时恒为 true |
 | 管理请求解码失败 | 400 短文本，不 panic |
 | 管理处理内部异常 | 现有 `recover` 返回 500，避免宿主熔断插件 |
 | 插件 shutdown 中 | `management.*` 返回错误信封（现有行为）；缓冲已清空 |

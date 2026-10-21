@@ -13,7 +13,7 @@
 | PK-3 | 规格入口 | Design-first | 2026-10-10 |
 | PK-4 | zip 输出位置 | 插件根目录 / 当前文件夹（`./privacygateway_<ver>_linux_amd64.zip`），不使用 `dist/` | 2026-10-10 |
 | PK-5 | 裸 `.so` 交付 | 额外复制 `./privacygateway-v<ver>.so` 到当前文件夹，文件名不得改动 | 2026-10-10 |
-| PK-6 | 检测面板 | 包内附单文件 `panel.html`；同一页面经插件资源路由内嵌进 CPA 管理界面 | 2026-10-11 |
+| PK-6 | 检测面板 | 包内附单文件 `panel.html`（仅 zip 分发、`file://` 排障）；管理界面内嵌页已由 RT-1 的 `trace.html`（菜单「隐私脱敏日志」）取代，`panel.html` 不再嵌入二进制 | 2026-10-11（2026-10-21 RT-1 调整） |
 
 非目标：插件商店（store）格式、GitHub Release 自动发布、arm64/macOS/Windows、修改宿主、改动脱敏业务逻辑、插件管理 API 写操作（插件只提供只读静态页面）。
 
@@ -25,7 +25,7 @@
 | 裸 `.so` | 已交付 | `./privacygateway-v0.1.0.so` |
 | `packaging/panel.html` | 已实现 | 独立单文件面板，见组件 3.2 |
 | `make smoke`（cgo） | 未实现 | 曾用一次性 Python ctypes 脚本验证：init `abi_version=1`、register `schema_version=6`、元数据字段非空、邮箱被替换为占位符 |
-| 插件内嵌页面 | 未实现 | 本文组件 6 |
+| 插件内嵌页面 | 已实现（RT-1 重定向） | 由 `request-trace-log` 规格以 `trace.html` 替代原面板方案，见该规格 design.md；本文件组件 6/数据模型保留原面板设计仅作历史参照 |
 | 真实宿主验收 | 未通过 | 用户用逐字符回显提示词测试，5 个敏感值全部以明文到达上游，插件当时未生效，根因未定位 |
 
 ### 宿主加载规则（CPA v8.0.22 源码事实）
@@ -293,8 +293,8 @@ func handleABIManagement(ctx context.Context, method string, request []byte) ([]
 | 包名 | `privacygateway_<ver>_linux_amd64.zip` | 与宿主 store 资产命名 `<id>_<ver>_<goos>_<goarch>.zip` 同构 |
 | 库路径 | `plugins/linux/amd64/privacygateway-v<ver>.so` | PK-2 |
 | 裸库 | `./privacygateway-v<ver>.so` | PK-5 |
-| 资源路由 | `{Path:"panel", Menu:"隐私脱敏检测", Description}` | 组件 6 |
-| 页面 URL | `/v0/resource/plugins/privacygateway/panel` | 宿主 `ResourceBasePath` + `Path` |
+| 资源路由 | ~~`{Path:"panel", Menu:"隐私脱敏检测"}`~~ → `{Path:"trace", Menu:"隐私脱敏日志"}`（RT-1，2026-10-21） | 组件 6 已由 `request-trace-log` 规格取代 |
+| 页面 URL | ~~`/v0/resource/plugins/privacygateway/panel`~~ → `/v0/resource/plugins/privacygateway/trace`；数据只走 `/v0/management/privacygateway/traces` | 宿主 `ResourceBasePath` + `Path` |
 
 ## Correctness Properties
 
