@@ -46,7 +46,7 @@ func TestTraceEventCapKeepsComplete(t *testing.T) {
 	b := enabledBuffer(4, 3)
 	b.record("r1", "", "request.received", nil)
 	b.record("r1", "", "redact.done", map[string]any{"findings": 2}) // 达 2 = maxEvents-1
-	b.record("r1", "", "response.restored", nil)                      // 应丢弃
+	b.record("r1", "", "response.restored", nil)                     // 应丢弃
 	b.record("r1", "", "request.complete", map[string]any{"outcome": "succeeded"})
 
 	rec := b.records["r1"]
@@ -168,7 +168,7 @@ func TestTraceStreamSummaryInPlace(t *testing.T) {
 	b.record("r1", "", "request.received", nil)
 	b.recordLatest("r1", "", "stream.summary", map[string]any{"chunks": 1})
 	b.recordLatest("r1", "", "stream.summary", map[string]any{"chunks": 5})
-	b.recordLatest("r1", "", "redact.done", nil) // 非同 stage → 追加
+	b.recordLatest("r1", "", "redact.done", nil)                            // 非同 stage → 追加
 	b.recordLatest("r1", "", "stream.summary", map[string]any{"chunks": 9}) // 末尾不是 summary → 追加
 
 	rec := b.records["r1"]

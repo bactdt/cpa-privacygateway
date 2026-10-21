@@ -85,7 +85,8 @@ func (m *Mapping) hasRaw(raw string) bool {
 	return ok
 }
 
-func (m *Mapping) Nonce() string {	return m.nonce
+func (m *Mapping) Nonce() string {
+	return m.nonce
 }
 
 func (m *Mapping) Size() int {
