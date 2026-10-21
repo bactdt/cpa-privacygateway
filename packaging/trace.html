@@ -6,127 +6,451 @@
 <title>隐私脱敏日志</title>
 <style>
 :root { color-scheme: light dark; }
+* { box-sizing: border-box; }
 body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; line-height: 1.5; }
 h1 { font-size: 1.1rem; margin: 0 0 .75rem; }
-.meta { font-size: .85rem; opacity: .8; margin-bottom: 1rem; }
-table { border-collapse: collapse; width: 100%; font-size: .85rem; }
-th, td { border: 1px solid rgba(127,127,127,.35); padding: .3rem .5rem; text-align: left; vertical-align: top; }
-th { position: sticky; top: 0; background: Canvas; }
+.top { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; margin-bottom: .75rem; }
+.top label { font-size: .85rem; }
+input[type=password], select { font: inherit; padding: .2rem .4rem; }
+button { font: inherit; padding: .2rem .7rem; cursor: pointer; }
+:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+#status { font-size: .9rem; margin-bottom: .25rem; }
+#err { color: #c0392b; font-size: .9rem; min-height: 1.2em; margin-bottom: .5rem; }
+#summary { font-size: .85rem; opacity: .85; margin-bottom: .75rem; }
+details.rec { border: 1px solid rgba(127,127,127,.35); border-radius: 4px; margin-bottom: .4rem; padding: .3rem .5rem; }
+details.rec summary { cursor: pointer; font-size: .85rem; display: flex; flex-wrap: wrap; gap: .4rem .8rem; align-items: baseline; }
+.bad { color: #c0392b; } .warn { color: #b9770e; } .ok { color: #1e8449; } .info { opacity: .7; }
+.events { margin: .4rem 0 .2rem 1rem; padding-left: .8rem; font-size: .82rem; font-family: ui-monospace, monospace; }
+.events li { margin: .1rem 0; white-space: pre-wrap; word-break: break-all; }
+.attempt { font-weight: 600; margin: .3rem 0 .1rem; }
+.empty { opacity: .7; padding: 1.5rem 0; text-align: center; }
+.badge { font-size: .75rem; border: 1px solid rgba(127,127,127,.5); border-radius: 3px; padding: 0 .3rem; }
 code { font-family: ui-monospace, monospace; }
-.empty { opacity: .7; padding: 2rem 0; text-align: center; }
-.err { color: #c0392b; }
 </style>
 </head>
 <body>
 <h1>隐私脱敏日志</h1>
-<div class="meta" id="meta">加载中…</div>
-<div id="notice"></div>
-<table id="tbl" hidden>
-<thead><tr>
-  <th>时间</th><th>RequestID</th><th>TraceID</th><th>结局</th><th>HTTP</th><th>检出</th><th>计数</th><th>事件</th>
-</tr></thead>
-<tbody id="rows"></tbody>
-</table>
-<div class="empty" id="empty" hidden>暂无追踪记录</div>
+<div class="top">
+  <label for="key">CPA 管理密钥</label>
+  <input id="key" type="password" autocomplete="off">
+  <label><input id="remember" type="checkbox">本标签页记住</label>
+  <button id="connect" type="button">连接</button>
+  <label for="filter">过滤</label>
+  <select id="filter">
+    <option value="all">全部</option>
+    <option value="findings">有检出</option>
+    <option value="errors">终止/失败/错误</option>
+  </select>
+  <button id="clear" type="button">清空日志</button>
+</div>
+<div id="status" role="status" aria-live="polite">请输入 CPA 管理密钥</div>
+<div id="err" role="alert"></div>
+<div id="summary" hidden></div>
+<div id="list"></div>
+<div class="empty" id="empty" hidden>暂无请求。请通过 CPA 发送一次模型请求，再回到此页</div>
 <script>
 "use strict";
 const KEY = "privacygateway.managementKey";
-const qs = new URLSearchParams(location.search);
-const BASE = (location.protocol === "file:" || !location.origin || location.origin === "null")
-  ? "http://127.0.0.1:8317"
-  : location.origin;
-const state = { since: 0, filter: "", key: sessionStorage.getItem(KEY) || "", inFlight: null };
+const POLL_MS = 3000;
+const TIMEOUT_MS = 8000;
+const DATA_PATH = "/v0/management/privacygateway/traces";
+const ORIGIN = (location.origin && location.origin !== "null") ? location.origin : "";
 
-function el(id){ return document.getElementById(id); }
-function notice(msg, isErr){
-  const n = el("notice");
-  n.textContent = msg || "";
-  n.className = isErr ? "err" : "";
-}
-function fmtTime(iso){
-  if(!iso) return "";
+const state = {
+  key: "", connected: false, stopped: false,
+  since: 0, filter: "all",
+  records: new Map(), order: [],
+  limits: { max_requests: 200 },
+  inflight: null, timer: null, timeoutId: null, timedOut: false
+};
+
+function el(id) { return document.getElementById(id); }
+function setText(id, msg) { el(id).textContent = msg || ""; }
+
+function fmtTime(iso) {
+  if (!iso) return "";
   const d = new Date(iso);
-  return isNaN(d) ? iso : d.toLocaleTimeString();
+  return isNaN(d) ? iso : d.toLocaleString();
 }
-function fmtCounts(counts){
-  if(!counts) return "";
-  return Object.entries(counts).map(([k,v]) => k + ":" + v).join(" ");
+function fmtCounts(counts) {
+  if (!counts) return "";
+  return Object.entries(counts).map(function (e) { return e[0] + ":" + e[1]; }).join(" ");
 }
-function fmtFields(f){
-  if(!f) return "";
-  return Object.entries(f).map(([k,v]) => k + "=" + (typeof v === "object" ? JSON.stringify(v) : v)).join(" ");
+function fmtFields(f) {
+  if (!f) return "";
+  return Object.entries(f).map(function (e) {
+    const v = (typeof e[1] === "object" && e[1] !== null) ? JSON.stringify(e[1]) : String(e[1]);
+    return e[0] + "=" + v;
+  }).join(" ");
 }
-function render(snap){
-  el("meta").textContent =
-    "buffered=" + snap.buffered + " evicted=" + snap.evicted + " next_since=" + snap.next_since +
-    " limits=" + JSON.stringify(snap.limits || {});
-  if(snap.plugin && snap.plugin.trace_enabled === false){
-    notice("追踪已关闭：在配置中设置 trace_enabled: true");
+function outcomeClass(rec) {
+  const o = String(rec.outcome || "");
+  if (rec.terminated || rec.has_error || o === "failed" || o === "rejected" || o === "canceled") return "bad";
+  if (o === "fail_open" || o === "passthrough") return "warn";
+  if (o === "succeeded" || o === "completed") return "ok";
+  return "info";
+}
+function outcomeMark(cls) {
+  if (cls === "bad") return "✖ ";
+  if (cls === "warn") return "⚠ ";
+  if (cls === "ok") return "✔ ";
+  return "ℹ ";
+}
+function outcomeText(rec) {
+  const o = rec.outcome || (rec.terminated ? "terminated" : "进行中");
+  const cls = outcomeClass(rec);
+  const label = cls === "bad" ? "（失败/终止）" : cls === "warn" ? "（放行）" : cls === "ok" ? "（正常）" : "（信息）";
+  return outcomeMark(cls) + o + label;
+}
+function recordDuration(rec) {
+  for (const ev of (rec.events || [])) {
+    if (ev.stage === "request.complete" && ev.fields && typeof ev.fields.duration_ms === "number") {
+      return ev.fields.duration_ms + " ms";
+    }
+  }
+  if (rec.events && rec.events.length >= 2) {
+    const first = new Date(rec.events[0].at).getTime();
+    const last = new Date(rec.events[rec.events.length - 1].at).getTime();
+    if (!isNaN(first) && !isNaN(last)) return (last - first) + " ms（估算）";
+  }
+  return "";
+}
+function receivedInfo(rec) {
+  for (const ev of (rec.events || [])) {
+    if (ev.stage === "request.received" && ev.fields && !ev.fields.attempt) {
+      const fmt = ev.fields.source_format || "?";
+      const stream = ev.fields.stream ? "流式" : "非流式";
+      const model = ev.fields.model ? (" model=" + ev.fields.model) : "";
+      return { fmt: fmt, stream: stream, model: model, bodyBytes: ev.fields.body_bytes };
+    }
+  }
+  return { fmt: "", stream: "", model: "", bodyBytes: null };
+}
+function attemptGroups(events) {
+  const flat = [];
+  const groups = [];
+  let cur = null;
+  for (const ev of (events || [])) {
+    if (ev.stage === "request.received" && ev.fields && Number(ev.fields.attempt) > 0) {
+      cur = { attempt: Number(ev.fields.attempt), events: [], added: 0, reused: 0 };
+      groups.push(cur);
+    } else if (ev.stage === "request.received") {
+      cur = null;
+      flat.push(ev);
+      continue;
+    }
+    if (cur) {
+      cur.events.push(ev);
+      if (ev.stage === "redact.done" && ev.fields) {
+        const findings = Number(ev.fields.findings) || 0;
+        const unique = Number(ev.fields.unique) || 0;
+        cur.added += unique;
+        cur.reused += findings - unique;
+      }
+    } else {
+      flat.push(ev);
+    }
+  }
+  return { flat: flat, groups: groups };
+}
+function appendEventList(parent, events, t0) {
+  const ol = document.createElement("ol");
+  ol.className = "events";
+  for (const ev of events) {
+    const li = document.createElement("li");
+    const off = t0 != null && ev.at ? (new Date(ev.at).getTime() - t0) : null;
+    const head = (off != null ? "+" + off + "ms " : "") + ev.stage + " ";
+    li.textContent = head + fmtFields(ev.fields);
+    ol.appendChild(li);
+  }
+  parent.appendChild(ol);
+}
+function appendRecord(rec) {
+  const det = document.createElement("details");
+  det.className = "rec";
+  const sum = document.createElement("summary");
+
+  const t = document.createElement("span");
+  t.textContent = fmtTime(rec.first_seen);
+  sum.appendChild(t);
+
+  const rid = document.createElement("code");
+  rid.textContent = rec.request_id || "(no id)";
+  sum.appendChild(rid);
+
+  if (rec.trace_id) {
+    const tid = document.createElement("span");
+    tid.className = "info";
+    tid.textContent = "trace [" + rec.trace_id + "]";
+    sum.appendChild(tid);
+  }
+
+  const info = receivedInfo(rec);
+  if (info.fmt || info.stream) {
+    const fmt = document.createElement("span");
+    fmt.textContent = (info.fmt || "?") + " · " + (info.stream || "?");
+    sum.appendChild(fmt);
+  }
+
+  const oc = outcomeClass(rec);
+  const out = document.createElement("span");
+  out.className = oc;
+  out.textContent = outcomeText(rec);
+  sum.appendChild(out);
+
+  if (rec.status) {
+    const st = document.createElement("span");
+    st.textContent = "HTTP " + rec.status;
+    sum.appendChild(st);
+  }
+
+  const dur = recordDuration(rec);
+  if (dur) {
+    const d = document.createElement("span");
+    d.textContent = dur;
+    sum.appendChild(d);
+  }
+
+  if (rec.finding_total) {
+    const f = document.createElement("span");
+    f.textContent = "检出 " + rec.finding_total + "（" + (fmtCounts(rec.counts) || "—") + "）";
+    sum.appendChild(f);
+  }
+  if (rec.partial) {
+    const p = document.createElement("span");
+    p.className = "badge warn";
+    p.textContent = "部分（缓冲淘汰）";
+    sum.appendChild(p);
+  }
+  if (rec.dropped_events) {
+    const de = document.createElement("span");
+    de.className = "badge warn";
+    de.textContent = "丢弃事件 " + rec.dropped_events;
+    sum.appendChild(de);
+  }
+
+  det.appendChild(sum);
+
+  const events = rec.events || [];
+  const t0 = events.length ? new Date(events[0].at).getTime() : new Date(rec.first_seen).getTime();
+  const split = attemptGroups(events);
+  appendEventList(det, split.flat, t0);
+  for (const g of split.groups) {
+    const h = document.createElement("div");
+    h.className = "attempt";
+    h.textContent = "第 " + g.attempt + " 次凭据尝试：新增 " + g.added + " 项、复用 " + g.reused + " 项";
+    det.appendChild(h);
+    appendEventList(det, g.events, t0);
+  }
+
+  el("list").appendChild(det);
+}
+
+function renderSummary(snap) {
+  const p = snap.plugin || {};
+  const l = snap.limits || {};
+  const box = el("summary");
+  box.hidden = false;
+  const parts = [
+    "插件 v" + (p.version || snap.version || "?"),
+    "enabled=" + (p.enabled ? "true" : "false"),
+    "fail_closed=" + (p.fail_closed ? "true" : "false"),
+    "缓冲 " + (snap.buffered != null ? snap.buffered : "?") + "/" + (l.max_requests != null ? l.max_requests : "?"),
+    "已淘汰 " + (snap.evicted || 0)
+  ];
+  box.textContent = parts.join(" · ");
+}
+
+function render() {
+  const list = el("list");
+  list.textContent = "";
+  const ids = state.order;
+  for (const id of ids) appendRecord(state.records.get(id));
+  const emptyBox = el("empty");
+  emptyBox.hidden = ids.length !== 0;
+}
+
+function mergeRequests(snap) {
+  const max = (snap.limits && snap.limits.max_requests) || state.limits.max_requests || 200;
+  state.limits.max_requests = max;
+  for (const rec of (snap.requests || [])) {
+    if (!rec || !rec.request_id) continue;
+    state.records.set(rec.request_id, rec);
+  }
+  const all = Array.from(state.records.values());
+  all.sort(function (a, b) {
+    return (new Date(b.first_seen).getTime()) - (new Date(a.first_seen).getTime());
+  });
+  state.order = all.slice(0, max).map(function (r) { return r.request_id; });
+  const keep = new Set(state.order);
+  for (const id of Array.from(state.records.keys())) {
+    if (!keep.has(id)) state.records.delete(id);
+  }
+  if (snap.next_since != null) state.since = snap.next_since;
+}
+
+function renderStatus(snap) {
+  if (!state.connected) return;
+  const p = snap.plugin || {};
+  if (p.trace_enabled === false) {
+    setText("status", "追踪已关闭：在配置中设置 trace_enabled: true");
+  } else if (p.enabled === false) {
+    setText("status", "插件总开关关闭，请求不会被脱敏，也不会被记录");
+  } else if (state.order.length === 0) {
+    setText("status", "已连接 · 暂无请求。请通过 CPA 发送一次模型请求，再回到此页");
   } else {
-    notice("");
-  }
-  const rows = snap.requests || [];
-  const tbody = el("rows");
-  tbody.textContent = "";
-  el("tbl").hidden = rows.length === 0;
-  el("empty").hidden = rows.length !== 0;
-  const t0 = rows.length ? new Date(rows[rows.length-1].first_seen).getTime() : 0;
-  for(const r of rows){
-    const tr = document.createElement("tr");
-    const first = new Date(r.first_seen).getTime();
-    const cells = [
-      fmtTime(r.first_seen),
-      r.request_id || "",
-      r.trace_id || "",
-      r.outcome || "",
-      r.status != null ? r.status : "",
-      r.finding_total != null ? r.finding_total : "",
-      fmtCounts(r.counts),
-    ];
-    for(const c of cells){
-      const td = document.createElement("td");
-      td.textContent = c;
-      tr.appendChild(td);
-    }
-    const td = document.createElement("td");
-    const ul = document.createElement("ul");
-    for(const ev of (r.events || [])){
-      const li = document.createElement("li");
-      const off = new Date(ev.at).getTime() - t0;
-      li.textContent = "+" + off + "ms " + ev.stage + " " + fmtFields(ev.fields);
-      ul.appendChild(li);
-    }
-    td.appendChild(ul);
-    tr.appendChild(td);
-    tbody.appendChild(tr);
-  }
-  state.since = snap.next_since != null ? snap.next_since : state.since;
-}
-async function load(){
-  try{
-    if(state.inFlight){ state.inFlight.abort(); }
-    const ctl = new AbortController();
-    state.inFlight = ctl;
-    const url = BASE + "/v0/management/privacygateway/traces?since=" + state.since +
-      (state.filter ? "&filter=" + encodeURIComponent(state.filter) : "");
-    const headers = state.key ? { "X-Management-Key": state.key } : {};
-    const resp = await fetch(url, { headers, cache: "no-store", signal: ctl.signal });
-    if(!resp.ok){ notice("加载失败：HTTP " + resp.status, true); return; }
-    render(await resp.json());
-  }catch(e){
-    if(e && e.name === "AbortError"){ return; }
-    notice("加载失败：" + e, true);
-  }finally{
-    state.inFlight = null;
+    setText("status", "已连接 · 每 " + (POLL_MS / 1000) + " 秒刷新（增量 since=" + state.since + "）");
   }
 }
-function boot(){
-  if(qs.get("key")){ state.key = qs.get("key"); sessionStorage.setItem(KEY, state.key); }
-  if(qs.get("filter")){ state.filter = qs.get("filter"); }
+
+function failStop(msg) {
+  state.stopped = true;
+  state.key = "";
+  try { sessionStorage.removeItem(KEY); } catch (e) { /* 存储不可用时仅清内存 */ }
+  el("key").value = "";
+  setText("status", msg);
+  setText("err", msg);
+}
+
+function httpMessage(status) {
+  if (status === 404) return "插件版本过旧或未注册管理路由，请确认已替换 .so 并重启 CPA";
+  if (status === 502) return "插件管理处理失败（宿主返回 502），请查看 CPA 日志";
+  if (status === 401 || status === 403) return "密钥错误，已停止自动刷新以免触发宿主封禁";
+  return "HTTP " + status;
+}
+
+function beginFetch(method) {
+  if (state.inflight) return null;
+  const ctl = new AbortController();
+  state.inflight = ctl;
+  state.timedOut = false;
+  state.timeoutId = setTimeout(function () {
+    state.timedOut = true;
+    ctl.abort();
+  }, TIMEOUT_MS);
+  const headers = { Authorization: "Bearer " + state.key };
+  const url = ORIGIN + DATA_PATH + "?since=" + state.since +
+    "&limit=" + ((state.limits && state.limits.max_requests) || 200) +
+    (state.filter !== "all" ? "&filter=" + encodeURIComponent(state.filter) : "");
+  return fetch(url, { method: method, headers: headers, cache: "no-store", signal: ctl.signal })
+    .catch(function (e) {
+      if (state.timedOut) throw new Error("请求超时（8s）");
+      throw new Error("网络错误：" + e);
+    });
+}
+
+function endFetch() {
+  if (state.timeoutId) clearTimeout(state.timeoutId);
+  state.timeoutId = null;
+  state.inflight = null;
+}
+
+function load() {
+  if (!state.key || state.stopped || state.inflight) return;
+  beginFetch("GET").then(function (resp) {
+    if (resp.status === 401 || resp.status === 403) {
+      failStop(httpMessage(resp.status));
+      return null;
+    }
+    if (!resp.ok) throw new Error(httpMessage(resp.status));
+    return resp.json().then(function (snap) {
+      mergeRequests(snap);
+      render();
+      renderSummary(snap);
+      renderStatus(snap);
+      setText("err", "");
+    });
+  }).catch(function (e) {
+    if (!state.stopped) setText("err", String(e && e.message ? e.message : e));
+  }).then(function () { endFetch(); });
+}
+
+function clearBuffer() {
+  if (!state.key || state.stopped || state.inflight) return;
+  if (!window.confirm("确认清空全部追踪日志？该操作不可恢复。")) return;
+  beginFetch("DELETE").then(function (resp) {
+    if (resp.status === 401 || resp.status === 403) {
+      failStop(httpMessage(resp.status));
+      return null;
+    }
+    if (!resp.ok) throw new Error(httpMessage(resp.status));
+    return resp.text().then(function () {
+      state.records.clear();
+      state.order = [];
+      state.since = 0;
+      render();
+      setText("status", "已清空追踪日志");
+      setText("err", "");
+    });
+  }).catch(function (e) {
+    if (!state.stopped) setText("err", String(e && e.message ? e.message : e));
+  }).then(function () { endFetch(); });
+}
+
+function startPolling() {
+  if (state.timer) return;
+  state.timer = setInterval(function () {
+    if (state.stopped || document.hidden || state.inflight) return;
+    load();
+  }, POLL_MS);
+}
+function stopPolling() {
+  if (state.timer) { clearInterval(state.timer); state.timer = null; }
+}
+
+function connect() {
+  const input = el("key").value.trim();
+  if (!input) {
+    setText("status", "请输入 CPA 管理密钥");
+    return;
+  }
+  state.key = input;
+  state.connected = true;
+  state.stopped = false;
+  state.since = 0;
+  if (el("remember").checked) {
+    try { sessionStorage.setItem(KEY, input); } catch (e) { /* 忽略存储失败 */ }
+  } else {
+    try { sessionStorage.removeItem(KEY); } catch (e) { /* 忽略存储失败 */ }
+  }
+  setText("err", "");
+  stopPolling();
   load();
-  setInterval(load, 3000);
+  startPolling();
 }
-boot();
+
+el("connect").addEventListener("click", connect);
+el("key").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") connect();
+});
+el("remember").addEventListener("change", function () {
+  if (!el("remember").checked) {
+    try { sessionStorage.removeItem(KEY); } catch (e) { /* 忽略存储失败 */ }
+  }
+});
+el("filter").addEventListener("change", function () {
+  state.filter = el("filter").value;
+  state.since = 0;
+  if (state.connected && !state.stopped) {
+    stopPolling();
+    load();
+    startPolling();
+  }
+});
+el("clear").addEventListener("click", clearBuffer);
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && state.connected && !state.stopped && !state.inflight) load();
+});
+
+(function boot() {
+  let saved = "";
+  try { saved = sessionStorage.getItem(KEY) || ""; } catch (e) { saved = ""; }
+  if (saved) {
+    el("key").value = saved;
+    el("remember").checked = true;
+    connect();
+  }
+})();
 </script>
 </body>
 </html>

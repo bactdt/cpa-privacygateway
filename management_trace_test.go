@@ -282,6 +282,96 @@ func TestTracePageServesEmbeddedHTML(t *testing.T) {
 	}
 }
 
+// TestTracePageSourceInvariants 覆盖 R14–R16 与 R15 的页面源码不变式。
+func TestTracePageSourceInvariants(t *testing.T) {
+	enablePanelForTrace(t)
+	html := string(callManagement(t, http.MethodGet, "trace").Body)
+
+	for _, forbidden := range []string{"innerHTML", "localStorage", "<script src", "http://", "https://"} {
+		if strings.Contains(html, forbidden) {
+			t.Errorf("trace 页源码不应包含 %q", forbidden)
+		}
+	}
+	for _, want := range []string{
+		"AbortController",
+		"8000",
+		"Authorization",
+		"sessionStorage",
+		"Bearer ",
+		`role="status"`,
+		`aria-live="polite"`,
+		`role="alert"`,
+		`createElement("details")`,
+		"textContent",
+		"/v0/management/privacygateway/traces",
+		"请输入 CPA 管理密钥",
+		"暂无请求。请通过 CPA 发送一次模型请求，再回到此页",
+		"追踪已关闭",
+		"插件总开关关闭，请求不会被脱敏，也不会被记录",
+		"请求超时（8s）",
+		"插件版本过旧或未注册管理路由",
+		"密钥错误，已停止自动刷新以免触发宿主封禁",
+		"trace [",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("trace 页源码应包含 %q", want)
+		}
+	}
+}
+
+// TestManagementVisibleRequiresBothSwitches 覆盖 TD-6 联动语义：
+// panel.enabled=true 但 trace_enabled=false 时不声明管理能力、路由与页面均 404。
+func TestManagementVisibleRequiresBothSwitches(t *testing.T) {
+	resetABIState(t)
+	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
+		lifecycleRequest(t, []byte("panel:\n  enabled: true\ntrace_enabled: false\n"))); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { resetABIState(t) })
+
+	raw, err := handleABIMethod(context.Background(), pluginabi.MethodManagementRegister, nil)
+	if err != nil {
+		t.Fatalf("management.register: %v", err)
+	}
+	var env struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Capabilities map[string]bool `json:"capabilities"`
+			Resources    []struct {
+				Path string `json:"Path"`
+			} `json:"resources"`
+			Routes []json.RawMessage `json:"routes"`
+		} `json:"result"`
+	}
+	if errDecode := json.Unmarshal(raw, &env); errDecode != nil || !env.OK {
+		t.Fatalf("信封异常：%s", raw)
+	}
+	if env.Result.Capabilities["management_api"] {
+		t.Errorf("trace_enabled=false 时 management_api 不应声明为 true：%s", raw)
+	}
+	if len(env.Result.Resources) != 0 || len(env.Result.Routes) != 0 {
+		t.Errorf("trace_enabled=false 时 resources/routes 应为空：%s", raw)
+	}
+	for _, probe := range []struct{ method, path string }{
+		{http.MethodGet, "trace"},
+		{http.MethodGet, traceDataPath},
+		{http.MethodDelete, traceDataPath},
+	} {
+		if got := callManagement(t, probe.method, probe.path).StatusCode; got != http.StatusNotFound {
+			t.Errorf("%s %s status = %d，期望 404", probe.method, probe.path, got)
+		}
+	}
+
+	// 重新打开 trace 后（panel 仍开）管理可达。
+	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
+		lifecycleRequest(t, []byte("panel:\n  enabled: true\ntrace_enabled: true\n"))); err != nil {
+		t.Fatalf("re-register: %v", err)
+	}
+	if got := callManagement(t, http.MethodGet, "trace").StatusCode; got != http.StatusOK {
+		t.Errorf("双开关打开后 GET trace status = %d，期望 200", got)
+	}
+}
+
 // registerTrace 按 YAML 注册插件；测试需在调用前设置 panelEnabled。
 func registerTrace(t *testing.T, yaml string) {
 	t.Helper()
