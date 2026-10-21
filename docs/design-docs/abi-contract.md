@@ -240,8 +240,8 @@ before/after-auth 共用格式处理：在条目锁内绑定首次非空 SourceF
 
 ```json
 {
-  "version": "0.1.4",
-  "plugin": {"version": "0.1.4", "enabled": true, "fail_closed": true, "trace_enabled": true},
+  "version": "0.1.5",
+  "plugin": {"version": "0.1.5", "enabled": true, "fail_closed": true, "trace_enabled": true},
   "limits": {"max_requests": 200, "max_events": 64, "max_finding_details": 64},
   "buffered": 3, "evicted": 0, "next_since": 7,
   "requests": [{ "...Trace_Record：id/started_at/finished_at/request_id/trace_id/format/stream/outcome/status/duration_ms/partial + events 与 findings 明细...": "..." }]
