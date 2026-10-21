@@ -6,7 +6,7 @@
       "name": "Privacy Gateway",
       "description": "Privacy redaction gateway for CLIProxyAPI requests and responses.",
       "author": "bactdt",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "repository": "https://github.com/bactdt/cpa-privacygateway",
       "license": "MIT",
       "tags": [
@@ -20,9 +20,9 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/bactdt/cpa-privacygateway/releases/download/v0.1.5/privacygateway_0.1.5_linux_amd64.zip",
-            "sha256": "b588e72822070340c95d1d61d9180504de2b0037df8769c227c766678f0c059f",
-            "size": 3945558
+            "url": "https://github.com/bactdt/cpa-privacygateway/releases/download/v0.1.6/privacygateway_0.1.6_linux_amd64.zip",
+            "sha256": "07f2f3a0c3f4dc81da6f51e074a51cce8406391924bf86d3caa4c0638cf2333d",
+            "size": 3946380
           }
         ]
       }
