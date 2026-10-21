@@ -135,6 +135,31 @@ func RestoreJSON(body []byte, m *Mapping) ([]byte, int, error) {
 	return transformJSON(body, 64, nil, visitor)
 }
 
+// RestoreJSONCounted 是 RestoreJSON 的观测版本：输出逐字节相同（需求 4.7），
+// 并汇总已还原/未知占位符统计（需求 4.6，未知样本至多 5 个）。
+func RestoreJSONCounted(body []byte, m *Mapping) ([]byte, RestoreJSONStats, error) {
+	var stats RestoreJSONStats
+	if m.Size() == 0 {
+		return body, stats, nil
+	}
+	visitor := func(_ []string, _, _ bool, value string) (string, bool, error) {
+		replaced, s := m.RestoreCounted(value)
+		stats.Restored += s.Restored
+		stats.Unknown += s.Unknown
+		for _, sample := range s.UnknownSamples {
+			if len(stats.UnknownSamples) < 5 {
+				stats.UnknownSamples = append(stats.UnknownSamples, sample)
+			}
+		}
+		if replaced == value {
+			return "", false, nil
+		}
+		return replaced, true, nil
+	}
+	out, _, err := transformJSON(body, 64, nil, visitor)
+	return out, stats, err
+}
+
 func lastKey(path []string) string {
 	if len(path) == 0 {
 		return ""

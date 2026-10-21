@@ -13,7 +13,26 @@ type requestState struct {
 	stream   *redact.StreamRestorer
 	admitted bool
 	format   string
+	attempts int // after_auth 被调用次数（RT-1 attempt 字段）
 	lastSeen time.Time
+}
+
+// nextAfterAuthAttempt 自增并返回 after_auth 调用序号（RT-1 需求 18 事件表）。
+func (s *requestState) nextAfterAuthAttempt() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attempts++
+	s.lastSeen = time.Now()
+	return s.attempts
+}
+
+// seedAfterAuthAttempt 让 after_auth 先于其他入口创建的状态从 1 计数。
+func (s *requestState) seedAfterAuthAttempt() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.attempts == 0 {
+		s.attempts = 1
+	}
 }
 
 func (s *requestState) setFormat(format string) {

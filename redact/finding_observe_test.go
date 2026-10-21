@@ -151,3 +151,54 @@ func TestRestoreCounted(t *testing.T) {
 		t.Errorf("Restore 与 RestoreCounted 输出不一致")
 	}
 }
+
+// TestRestoreJSONCounted 验证需求 4.6/4.7：输出与 RestoreJSON 相同且统计正确。
+func TestRestoreJSONCounted(t *testing.T) {
+	m := newObservedMapping(t)
+	cfg := DefaultConfig()
+	body := []byte(`{"messages":[{"role":"user","content":"邮箱 user@example.com"}]}`)
+	redacted, _, err := RedactJSON("openai", body, m, cfg, WalkOptions{Format: "openai"})
+	if err != nil {
+		t.Fatalf("RedactJSON: %v", err)
+	}
+
+	out, stats, err := RestoreJSONCounted(redacted, m)
+	if err != nil {
+		t.Fatalf("RestoreJSONCounted: %v", err)
+	}
+	if string(out) != string(body) {
+		t.Errorf("还原输出 = %q", out)
+	}
+	if stats.Restored != 1 || stats.Unknown != 0 {
+		t.Errorf("stats = %+v", stats)
+	}
+
+	// 未知占位符（本 nonce 格式、不在映射中）
+	injected := []byte(`{"x":"[[PG_` + m.Nonce() + `_999]]"}`)
+	out2, stats2, err := RestoreJSONCounted(injected, m)
+	if err != nil {
+		t.Fatalf("RestoreJSONCounted(unknown): %v", err)
+	}
+	if stats2.Unknown != 1 || len(stats2.UnknownSamples) != 1 {
+		t.Errorf("unknown stats = %+v", stats2)
+	}
+	if !strings.Contains(string(out2), "PG_") {
+		t.Errorf("未知占位符应保留: %q", out2)
+	}
+
+	// 输出与 RestoreJSON 逐字节相同（同一 mapping 状态比较）
+	plain, _, err := RestoreJSON(injected, m)
+	if err != nil {
+		t.Fatalf("RestoreJSON: %v", err)
+	}
+	if string(plain) != string(out2) {
+		t.Errorf("RestoreJSON 与 RestoreJSONCounted 输出不一致:\n%s\n%s", plain, out2)
+	}
+
+	// 空映射早退
+	empty := newObservedMapping(t)
+	out3, stats3, err := RestoreJSONCounted([]byte(`{"x":"1"}`), empty)
+	if err != nil || string(out3) != `{"x":"1"}` || stats3.Restored != 0 {
+		t.Errorf("空映射: out=%s stats=%+v err=%v", out3, stats3, err)
+	}
+}

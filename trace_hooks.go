@@ -113,22 +113,19 @@ func (t traceLogger) redactFailed(reason, action string, status int) {
 	t.record("redact.failed", map[string]any{"reason": reason, "action": action, "status": status})
 }
 
-// responseRestored 记录 response.restored；skipped 为 no_mapping/empty_body/parse_failed，正常时为空。
+// responseRestored 记录 response.restored；skipped 为 no_mapping/empty_body/parse_failed，正常时为空串。
 func (t traceLogger) responseRestored(statusCode, bodyBytes, restored, unknown int, unknownSamples []string, skipped string) {
 	if !t.on() {
 		return
 	}
-	fields := map[string]any{
+	t.record("response.restored", map[string]any{
 		"status_code":     statusCode,
 		"body_bytes":      bodyBytes,
 		"restored":        restored,
 		"unknown":         unknown,
 		"unknown_samples": unknownSamples,
-	}
-	if skipped != "" {
-		fields["skipped"] = skipped
-	}
-	t.record("response.restored", fields)
+		"skipped":         skipped,
+	})
 }
 
 // streamSummary 记录/原地刷新 stream.summary（每块，TD-6）。

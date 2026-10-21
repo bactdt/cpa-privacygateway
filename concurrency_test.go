@@ -81,7 +81,7 @@ func TestFirstRedactionReusesMappingInstalledByOtherCallback(t *testing.T) {
 	body := concurrencyBody(1)
 	response, err := p.redactInterceptRequest(cfg, detector, "openai", pluginapi.RequestInterceptRequest{
 		RequestID: "same-id", SourceFormat: "openai", Body: body,
-	}, false)
+	}, false, traceLogger{})
 	assertConcurrentRoundTrip(t, p, "same-id", response, body, err)
 	if p.states.mapping("same-id") != winner {
 		t.Fatal("竞争失败的回调必须使用状态表已存的映射")
@@ -127,7 +127,7 @@ func TestOldCallbacksFollowStateHandoff(t *testing.T) {
 	body := concurrencyBody(0)
 	resp, err := old.redactInterceptRequest(cfg, detector, "openai", pluginapi.RequestInterceptRequest{
 		RequestID: "pending", SourceFormat: "openai", Body: body,
-	}, true)
+	}, true, traceLogger{})
 	assertConcurrentRoundTrip(t, next, "pending", resp, body, err)
 	assertConcurrentRoundTrip(t, old, "pending", resp, body, err)
 	old.states.setFormat("pending", "openai")
@@ -356,7 +356,7 @@ func TestFailedFirstCallbackPreservesPublishedMapping(t *testing.T) {
 	// already published a usable mapping under this ID.
 	failed, err := p.redactInterceptRequest(cfg, detector, "openai", pluginapi.RequestInterceptRequest{
 		RequestID: "shared", SourceFormat: "openai", Body: []byte(`{"content":`),
-	}, true)
+	}, true, traceLogger{})
 	if err != nil || !failed.Terminate || failed.StatusCode != http.StatusBadRequest {
 		t.Fatal("坏正文须按解析失败拒绝")
 	}
@@ -378,7 +378,7 @@ func TestFindingsFailurePreservesPublishedMapping(t *testing.T) {
 	cfg, detector := p.settings()
 	failed, err := p.redactInterceptRequest(cfg, detector, "openai", pluginapi.RequestInterceptRequest{
 		RequestID: "shared", SourceFormat: "openai", Body: []byte(`{"content":"PRIVATE_000 PRIVATE_001"}`),
-	}, true)
+	}, true, traceLogger{})
 	if err != nil || !failed.Terminate || failed.StatusCode != http.StatusInternalServerError {
 		t.Fatal("检出超限须拒绝当前正文")
 	}
