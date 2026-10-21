@@ -14,6 +14,7 @@ func newTraceTestPlugin(t *testing.T) *plugin {
 	t.Helper()
 	p := newPlugin(defaultConfig())
 	p.traces.configure(true, 16, 32)
+	p.traces.setRecording(true)
 	return p
 }
 
@@ -130,6 +131,7 @@ func TestTraceWiringGuardBlocked(t *testing.T) {
 	cfg.RejectKeywords = []string{"BLOCKME"}
 	p := newPlugin(cfg)
 	p.traces.configure(true, 8, 16)
+	p.traces.setRecording(true)
 
 	resp, err := p.InterceptRequestBeforeAuth(context.Background(), pluginapi.RequestInterceptRequest{
 		RequestID: "r2", SourceFormat: "openai", Body: []byte(`{"messages":[{"role":"user","content":"BLOCKME now"}]}`),
@@ -161,6 +163,7 @@ func TestTraceWiringConcurrencyRejected(t *testing.T) {
 	cfg.MaxConcurrency = 1
 	p := newPlugin(cfg)
 	p.traces.configure(true, 8, 16)
+	p.traces.setRecording(true)
 	body := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
 	if _, err := p.InterceptRequestBeforeAuth(context.Background(), pluginapi.RequestInterceptRequest{
 		RequestID: "r1", SourceFormat: "openai", Body: body,

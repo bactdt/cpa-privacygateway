@@ -63,6 +63,9 @@ panel:
 # 是否把每个请求的脱敏事件写入内存环形缓冲（management 数据路由 GET/DELETE
 # /v0/management/privacygateway/traces 读取）。默认 true；仅内存、仅掩码信息，不含原值。
 trace_enabled: true
+# 注册后是否立即开始记录。默认 false：页面点击「开始记录」后才采集（开启时清空旧记录）；
+# 需要开机即记录（如排障期常驻）时改为 true。
+trace_recording: false
 # 内存中保留的请求记录条数，1..2000，默认 200；超限淘汰最旧记录并标记 partial。
 trace_max_requests: 200
 # 每条请求记录保留的事件条数，8..256，默认 64；总保有 request.complete 槽位。

@@ -20,12 +20,13 @@
 | TD-2 | 数据接口 `GET/DELETE /v0/management/privacygateway/traces`（宿主鉴权，不设 Menu）；避开宿主 `/v0/management/plugins/:id/...` 参数路由树 |
 | TD-3 | 页面资源路由 `trace`，菜单"隐私脱敏日志"；移除内嵌 `panel` 路由 |
 | TD-4 | `panel.html` 继续随 zip 分发，仅作 `file://` 独立排障 |
-| TD-5 | 默认 `trace_enabled: true`、`trace_max_requests: 200`、`trace_max_events: 64`（最坏约 6 MiB） |
+| TD-5 | 默认 `trace_enabled: true`、`trace_recording: false`、`trace_max_requests: 200`、`trace_max_events: 64`（最坏约 6 MiB） |
 | TD-6 | 流式只保留一条原地更新的 `stream.summary` 事件，字段为流式计数接口的值 |
 | TD-7 | 管理密钥默认只放内存，可选 `sessionStorage`；401/403 立即停止轮询并清除内存与 `sessionStorage` 中的密钥（宿主 5 次失败封禁 IP 30 分钟） |
 | TD-8 | 记录宿主 `TraceID`，用于对照 gin 日志 |
 | TD-9 | `pluginMetadata` 从 `abi.go`（499 行）迁到 `metadata.go` |
 | TD-10 | 流式统计来源为 `stream-restore-bare-chunks` 的计数接口；不改 `redact/stream.go` 与 `InterceptStreamChunk` 的还原逻辑 |
+| TD-12 | 记录开关默认关闭：注册后不采集，点页面「开始记录」（`POST /traces/recording`）或配置 `trace_recording: true` 才记录；开启清空旧记录，停止保留已有记录（2026-10-21 用户要求：日常不要在面板出现日志） |
 | TD-11 | 管理可见性联动：`management_api` 能力、资源/数据路由可达性 = `panel.enabled` **且** `trace_enabled`；任一关闭即不声明能力并 404（2026-10-21 实施阶段确认，已回写 requirements/design，替代原"trace_enabled=false 时页面可达并显示关闭提示"的描述） |
 
 ## 3. 依赖

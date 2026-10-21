@@ -30,17 +30,17 @@ https://raw.githubusercontent.com/bactdt/cpa-privacygateway/main/plugin.json
 
 ```sh
 cd /path/to/CPA
-mkdir -p /tmp/privacygateway-0.1.6
-unzip privacygateway_0.1.6_linux_amd64.zip -d /tmp/privacygateway-0.1.6
-(cd /tmp/privacygateway-0.1.6 && sha256sum -c privacygateway/checksums.txt)
-install -D -m 0755 /tmp/privacygateway-0.1.6/privacygateway-v0.1.6.so \
-  plugins/linux/amd64/privacygateway-v0.1.6.so
+mkdir -p /tmp/privacygateway-0.1.7
+unzip privacygateway_0.1.7_linux_amd64.zip -d /tmp/privacygateway-0.1.7
+(cd /tmp/privacygateway-0.1.7 && sha256sum -c privacygateway/checksums.txt)
+install -D -m 0755 /tmp/privacygateway-0.1.7/privacygateway-v0.1.7.so \
+  plugins/linux/amd64/privacygateway-v0.1.7.so
 ```
 
 CPA 插件商店安装器会将动态库写入：
 
 ```text
-plugins/linux/amd64/privacygateway-v0.1.6.so
+plugins/linux/amd64/privacygateway-v0.1.7.so
 ```
 
 ## 配置
@@ -104,7 +104,8 @@ plugins:
 - 占位符使用每请求随机 nonce，不能跨请求复用。
 - 插件不会把映射上传到外部服务。
 - 自定义规则是脱敏匹配规则，不是密码学加密。
-- 管理界面追踪页面默认不可见（需 `panel.enabled: true` 且 `trace_enabled: true` 才注册，菜单「隐私脱敏日志」）；追踪只保留掩码预览、仅内存有界，不写磁盘与宿主日志。
+- 管理界面追踪页面默认不可见（需 `panel.enabled: true` 且 `trace_enabled: true` 才注册，菜单「隐私脱敏日志」）。
+- 追踪默认**不记录**：页面打开后点「开始记录」才采集（开启时清空旧记录，停止后保留已有记录可继续阅读）；也可配置 `trace_recording: true` 开机即记录。追踪只保留掩码预览、仅内存有界，不写磁盘与宿主日志。
 - 包内 `panel.html` 仅为随 zip 分发的 `file://` 本地排障页，不再嵌入动态库。
 
 ## 构建

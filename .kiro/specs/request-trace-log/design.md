@@ -21,12 +21,13 @@
 | TD-2 | 数据接口 | 管理路由 `GET/DELETE /v0/management/privacygateway/traces`，不设 `Menu` | 走宿主管理鉴权；不落在宿主 `/plugins/:id/...` 参数路由树下（见 6.2） |
 | TD-3 | 页面路由 | 资源路由 `Path:"trace"`、`Menu:"隐私脱敏日志"`；去掉内嵌 `panel` 资源路由 | 一个插件只保留一个菜单，避免两个入口 |
 | TD-4 | 旧面板 | `packaging/panel.html` 继续打进 zip 的 `privacygateway/panel.html`，仅作 `file://` 独立排障工具，不再内嵌 | 宿主 Home 模式下资源路由不可用时仍有排障手段 |
-| TD-5 | 缓冲默认值 | `trace_enabled: true`、`trace_max_requests: 200`、`trace_max_events: 64` | 用户要求开箱可见；最坏内存约 6 MiB（见 Performance） |
+| TD-5 | 缓冲默认值 | `trace_enabled: true`、`trace_recording: false`、`trace_max_requests: 200`、`trace_max_events: 64` | 用户要求开箱可见但**默认不采集**；最坏内存约 6 MiB（见 Performance） |
 | TD-6 | 流式记录 | 每个请求只有一条 `stream.summary` 事件，原地累加计数，不按块追加 | 长流可达上千块，逐块记录会挤掉其他阶段事件 |
 | TD-7 | 管理密钥 | 页面输入，默认只放内存；勾选"本标签页记住"才写 `sessionStorage`，永不写 `localStorage` | 页面与 CPA 同源；`sessionStorage` 随标签页关闭清除 |
 | TD-8 | 关联宿主日志 | 记录宿主下发的 `TraceID`（8 位十六进制，即 gin 日志中的 `[f2fd6250]`） | 宿主源码确认拦截与完成回调都会填充（见 6.2） |
 | TD-9 | `pluginMetadata` 迁移 | 从 `abi.go` 移到新文件 `metadata.go` | `abi.go` 已 499 行；腾出约 17 行给必要的单行挂钩 |
 | TD-10 | 流式统计来源 | 只消费 `stream-restore-bare-chunks` 提供的计数接口；不修改 `redact/stream.go` 与 `InterceptStreamChunk` 的还原逻辑 | 2026-10-11 发现流块全丢缺陷，由独立 bugfix 规格修复并替换流式 API，避免两个规格改同一处 |
+| TD-12 | 记录开关默认关闭 | 注册后进入未记录态；点页面「开始记录」（或配置 `trace_recording: true`）才采集，开启时清空旧记录，停止时保留已有记录 | 2026-10-21 用户反馈：日常不想在面板上看到日志，只在主动排查时记录；避免无谓的敏感元数据留存 | 
 | TD-11 | 管理可见性联动 | 管理能力声明与页面/数据路由可达性 = `panel.enabled` **且** `trace_enabled`；任一关闭即 `management_api=false`、空 routes/resources、页面与数据均 404 | 2026-10-21 实施阶段用户确认的偏差：替代原"trace_enabled=false 时页面可达并显示关闭提示"的描述（已回写 requirements R10/R11/R15 与本文档 §5/故障表）；关闭追踪后页面无数据可看，404 比空态更明确，也少一个可达入口 |
 
 非目标：持久化到磁盘、写宿主日志、导出/下载日志、跨进程或多实例聚合、修改脱敏算法、修改宿主或管理中心前端、展示请求/响应正文片段。
@@ -362,7 +363,7 @@ type abiManagementRoute struct {
 
 ```text
 ┌ 顶栏：管理密钥 [••••••] □本标签页记住  [连接]  状态：● 已连接 / 错误信息（aria-live=polite）
-├ 工具条：自动刷新 [开/关] 间隔 3s  筛选 (全部 | 有检出 | 异常)  [清空日志]  上次刷新 12:00:03
+├ 工具条：筛选 (全部 | 有检出 | 异常)  [开始记录/停止记录]  [暂停刷新]  [清空日志]  上次刷新 12:00:03
 ├ 汇总：插件 v0.1.0 · enabled · fail_closed · 缓冲 37/200 · 已滚出 0
 └ 请求列表（新在上）
    ▸ 12:00:01  req 3f2a…  trace [f2fd6250]  openai · stream  ✔ succeeded 200 · 812ms · 检出 2（email 1, phone 1）
@@ -379,11 +380,13 @@ type abiManagementRoute struct {
 - **不挂起**：所有 `fetch` 使用 `AbortController`，超时 8 秒；超时、网络错误、非 2xx 都在状态区显示具体原因（"请求超时（8s）"、"HTTP 502：插件管理处理失败"等）。同一时刻最多一个在途轮询，上一次未结束不发起下一次。
 - **防封禁**：宿主对同一 IP 连续 5 次密钥错误封禁 30 分钟（`AuthenticateManagementKey`）。收到 401/403 立即停止自动刷新，清除内存与 `sessionStorage` 中的密钥（避免刷新页面后用错误密钥重试），并提示"密钥错误，已停止自动刷新以免触发宿主封禁"。
 - **增量**：首轮 `since=0`，之后用响应 `next_since`；页面最多保留 `trace_max_requests` 条，按 `request_id` 合并更新。
+- **增量渲染（关键）**：以 `request_id + updated_seq` 为键复用 DOM 节点；未变化的记录不重建，已展开的 `<details>` 与滚动位置保持不变（新记录插到顶部时用锚点补偿滚动）。仅 `updated_seq` 变化的记录重建并恢复其展开状态。提供「暂停刷新」按钮，暂停期间不轮询。
+- **记录开关**：默认未记录，列表显示"未在记录"提示；点「开始记录」`POST .../traces/recording`，成功后清空本地列表、`since` 置 0 并立即拉取；点「停止记录」保留已有列表可继续阅读。
 - **隐藏暂停**：`document.hidden` 时暂停轮询，可见时立即刷新一次。
 - **渲染安全**：只用 `textContent` / `createElement`，不用 `innerHTML`；模型名、占位符等一律当文本。
 - **颜色语义**：终止/失败为红、fail_open 放行为橙、正常为绿、信息为灰；颜色之外同时使用图标与文字（不只靠颜色传达状态）。
 - **可访问性**：所有输入有 `<label>`；请求条目为 `<details>/<summary>`，可用键盘展开；状态区 `role="status" aria-live="polite"`；错误区 `role="alert"`；焦点样式可见；对比度目标 WCAG AA（需人工复核）。
-- **空态提示**：无密钥时"请输入 CPA 管理密钥"；已连接但无记录时"暂无请求。请通过 CPA 发送一次模型请求，再回到此页"；插件 `enabled=false` 时"插件总开关关闭，请求不会被脱敏，也不会被记录"。（`trace_enabled=false` 时页面按 TD-11 直接 404 不可达；页面仍保留对响应字段 `trace_enabled: false` 的防御性提示分支。）
+- **空态提示**：无密钥时"请输入 CPA 管理密钥"；已连接但未在记录时"未在记录。点击「开始记录」后才会采集请求日志（开启时会清空旧记录）"；记录中但无数据时"暂无请求。请通过 CPA 发送一次模型请求，再回到此页"；插件 `enabled=false` 时"插件总开关关闭，请求不会被脱敏，也不会被记录"。（`trace_enabled=false` 时页面按 TD-11 直接 404 不可达；页面仍保留对响应字段 `trace_enabled: false` 的防御性提示分支。）
 - **清空**：二次确认后 `DELETE`，成功后清空本地列表并重置 `since`。
 - **密钥存储**（TD-7）：默认只放 JS 变量；勾选后写 `sessionStorage["privacygateway.managementKey"]`；取消勾选立即删除。请求头使用 `Authorization: Bearer <key>`。
 
@@ -420,15 +423,17 @@ type abiManagementRoute struct {
 `config.go` 新增：
 
 ```go
-TraceEnabled     *bool `yaml:"trace_enabled"`      // 默认 true
+TraceEnabled     *bool `yaml:"trace_enabled"`      // 默认 true（总开关）
+TraceRecording   *bool `yaml:"trace_recording"`    // 默认 false（注册后是否立即记录）
 TraceMaxRequests int   `yaml:"trace_max_requests"` // 默认 200，范围 1..2000
 TraceMaxEvents   int   `yaml:"trace_max_events"`   // 默认 64，范围 8..256
 ```
 
 - 超出范围时 `parseConfig` 返回错误（与现有字段一致：初次注册失败，重配保留旧配置）。
-- `config.example.yaml` 与包内 `config.snippet.yaml`（由示例派生）同步三项。
-- `pluginMetadata()` 移到 `metadata.go`（TD-9），并补 3 个 `ConfigField`。
-- `trace_enabled=false`：缓冲清空并关闭；所有记录函数在 `atomic.Bool` 检查后立即返回；`WalkOptions.OnFinding` 为 nil。
+- `config.example.yaml` 与包内 `config.snippet.yaml`（由示例派生）同步四项。
+- `pluginMetadata()` 移到 `metadata.go`（TD-9），并补 4 个 `ConfigField`。
+- `trace_enabled=false`：缓冲清空并关闭；所有记录函数在开关读取后立即返回；`WalkOptions.OnFinding` 为 nil。
+- `trace_recording=false`（默认）：总开关打开但缓冲处于未记录态，事件不落缓冲；页面「开始记录」通过管理路由运行时打开（每次注册/重配按配置重置）。
 
 ### 8. 文件变更清单（实现阶段）
 
@@ -535,8 +540,9 @@ type traceRecord struct {
 ```json
 {
   "version": 1,
-  "plugin": {"version": "0.1.0", "enabled": true, "fail_closed": true, "trace_enabled": true},
+  "plugin": {"version": "0.1.0", "enabled": true, "fail_closed": true, "trace_enabled": true, "trace_recording": true},
   "limits": {"max_requests": 200, "max_events": 64, "max_finding_details": 64},
+  "recording": true,
   "buffered": 37,
   "evicted": 0,
   "next_since": 1824,
@@ -547,9 +553,10 @@ type traceRecord struct {
 | 名称 | 形状 | 说明 |
 |---|---|---|
 | 数据路由 | `GET`/`DELETE /v0/management/privacygateway/traces` | 宿主鉴权 |
+| 记录开关 | `POST /v0/management/privacygateway/traces/recording`（body `{"recording":bool}` → `{"recording":bool,"cleared":n}`） | 宿主鉴权；400/405/404 语义同数据路由 |
 | 页面路由 | `GET /v0/resource/plugins/privacygateway/trace` | 不鉴权，静态内容 |
 | 菜单 | `隐私脱敏日志` | 替换 `隐私脱敏检测` |
-| 配置键 | `trace_enabled` / `trace_max_requests` / `trace_max_events` | 组件 7 |
+| 配置键 | `trace_enabled` / `trace_recording` / `trace_max_requests` / `trace_max_events` | 组件 7 |
 
 ## Correctness Properties
 
@@ -653,6 +660,10 @@ type traceRecord struct {
 | `trace_*` 配置越界 | `parseConfig` 返回错误；初次注册失败、重配保留旧配置（与现有字段一致） |
 | 重配缩小 `trace_max_requests` | `configure` 淘汰最旧记录直至满足新上限 |
 | `trace_enabled=false` | 清空缓冲；管理可见性联动（TD-11）：`management_api` 不声明、页面与数据路由 404；GET 响应的 `trace_enabled` 字段在可达时恒为 true |
+| `trace_recording=false`（默认） | 不采集事件；GET 返回 `recording:false`；已有记录保留；页面显示"未在记录"空态与「开始记录」按钮 |
+| `POST .../recording` body 非法 | 400 纯文本 `privacy gateway trace recording requires {"recording":true|false}` |
+| `GET`/`PUT` 等非 POST 访问 recording 路由 | 405，`Allow: POST` |
+| 开启记录后首个事件不是 `request.received` | 该记录标 `partial:true`（请求在记录开启前已开始，早期阶段未被采集） |
 | 管理请求解码失败 | 400 短文本，不 panic |
 | 管理处理内部异常 | 现有 `recover` 返回 500，避免宿主熔断插件 |
 | 插件 shutdown 中 | `management.*` 返回错误信封（现有行为）；缓冲已清空 |

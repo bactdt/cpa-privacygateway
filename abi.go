@@ -335,6 +335,7 @@ func handleABIRegister(ctx context.Context, method string, request []byte) ([]by
 		p.traces = previous.traces
 		maxRequests, maxEvents := cfg.traceLimits()
 		p.traces.configure(cfg.traceOn(), maxRequests, maxEvents)
+		p.traces.setRecording(cfg.traceRecording())
 	}
 	if abiState.stopJanitor != nil {
 		close(abiState.stopJanitor)

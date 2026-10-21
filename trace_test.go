@@ -95,6 +95,7 @@ func TestTraceConfigureDisableAndShrink(t *testing.T) {
 	}
 
 	b.configure(true, 4, 8)
+	b.setRecording(true) // 重新打开追踪总开关后需再次开始记录
 	b.record("a", "", "request.received", nil)
 	b.record("c", "", "request.received", nil)
 	b.configure(true, 1, 8) // 缩容 → 只留最后创建的 c？按首次出现淘汰最旧 → 淘汰 a
@@ -303,4 +304,52 @@ func TestRecordABIFailure(t *testing.T) {
 		t.Error("关闭态应 no-op")
 	}
 	recordABIFailure(nil, "m", `{}`, "panic") // nil buffer 不得 panic
+}
+
+// 需求 7.6：记录开关默认由 plugin 注入；关闭时不再采集，开启时清空旧记录。
+func TestTraceRecordingToggle(t *testing.T) {
+	b := enabledBuffer(8, 16)
+	b.record("r1", "t1", "request.received", nil)
+	if n := len(b.snapshot(0, 10, "").Requests); n != 1 {
+		t.Fatalf("初始记录数 = %d，期望 1", n)
+	}
+
+	b.setRecording(false)
+	b.record("r2", "", "request.received", nil)
+	if n := len(b.snapshot(0, 10, "").Requests); n != 1 {
+		t.Errorf("停止记录后仍新增记录：%d 条", n)
+	}
+	if b.traceOn() {
+		t.Error("停止记录后 traceOn 应为 false")
+	}
+
+	on, cleared := b.setRecording(true)
+	if !on || cleared != 1 {
+		t.Fatalf("开启记录应返回 (true,1)，实际 (%v,%d)", on, cleared)
+	}
+	if n := len(b.snapshot(0, 10, "").Requests); n != 0 {
+		t.Errorf("开启记录应清空旧记录，实际剩 %d 条", n)
+	}
+	if !b.snapshot(0, 10, "").Recording {
+		t.Error("开启后 snapshot.Recording 应为 true")
+	}
+
+	// 记录中途开启：首事件不是 request.received 的记录标记 partial。
+	b.record("r3", "t3", "redact.done", map[string]any{"findings": 1})
+	rec := b.records["r3"]
+	if rec == nil || !rec.Partial {
+		t.Fatalf("中途开始的记录应 partial：%+v", rec)
+	}
+}
+
+// 追踪总开关关闭时不允许开始记录（需求 7.4/7.6）。
+func TestTraceRecordingRequiresEnabled(t *testing.T) {
+	b := newTraceBuffer()
+	b.configure(false, 4, 8)
+	if on, cleared := b.setRecording(true); on || cleared != 0 {
+		t.Errorf("关闭追踪时开启记录应无效，实际 (%v,%d)", on, cleared)
+	}
+	if b.traceOn() {
+		t.Error("关闭追踪时 traceOn 应为 false")
+	}
 }

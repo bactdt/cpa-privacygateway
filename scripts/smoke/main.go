@@ -228,7 +228,7 @@ func panelEnabledSmoke() bool {
 }
 
 func stepRegister(api *C.cliproxy_plugin_api) error {
-	configYAML := "enabled: true\nfail_closed: true\n"
+	configYAML := "enabled: true\nfail_closed: true\ntrace_recording: true\n"
 	if panelEnabledSmoke() {
 		configYAML += "panel:\n  enabled: true\n"
 	}
@@ -335,21 +335,25 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 		return fail("management.register", fmt.Sprintf("PANEL_ENABLED=%v 时 resources 应为 %d 项，实际 %d 项", panelEnabledSmoke(), wantResources, len(result.Resources)))
 	}
 	if panelEnabledSmoke() {
-		// R20.1：2 条管理路由（GET/DELETE，完整管理路径）与资源路由 trace。
-		if len(result.Routes) != 2 {
-			return fail("management.register", fmt.Sprintf("routes 应为 2 条，实际 %d：%s", len(result.Routes), string(env.Result)))
+		// R20.1/需求 7.6：3 条管理路由（GET/DELETE + POST recording）与资源路由 trace。
+		if len(result.Routes) != 3 {
+			return fail("management.register", fmt.Sprintf("routes 应为 3 条，实际 %d：%s", len(result.Routes), string(env.Result)))
 		}
-		wantMethods := map[string]bool{"GET": false, "DELETE": false}
+		wantMethods := map[string]bool{"GET": false, "DELETE": false, "POST": false}
 		for _, r := range result.Routes {
-			if r.Path != "/v0/management/privacygateway/traces" {
-				return fail("management.register", fmt.Sprintf("route path = %q，期望完整管理路径", r.Path))
+			wantPath := "/v0/management/privacygateway/traces"
+			if r.Method == "POST" {
+				wantPath += "/recording"
+			}
+			if r.Path != wantPath {
+				return fail("management.register", fmt.Sprintf("route %s path = %q，期望 %q", r.Method, r.Path, wantPath))
 			}
 			if _, ok := wantMethods[r.Method]; !ok {
-				return fail("management.register", fmt.Sprintf("route method = %q 不在 GET/DELETE", r.Method))
+				return fail("management.register", fmt.Sprintf("route method = %q 不在 GET/DELETE/POST", r.Method))
 			}
 			wantMethods[r.Method] = true
 		}
-		if !wantMethods["GET"] || !wantMethods["DELETE"] {
+		if !wantMethods["GET"] || !wantMethods["DELETE"] || !wantMethods["POST"] {
 			return fail("management.register", fmt.Sprintf("routes 方法不全：%v", wantMethods))
 		}
 		if result.Resources[0].Path != "trace" || result.Resources[0].Menu != "隐私脱敏日志" {
@@ -390,6 +394,9 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 	if panelEnabledSmoke() {
 		if dataResult.StatusCode != 200 {
 			return fail("management.handle", fmt.Sprintf("GET traces StatusCode=%d，期望 200", dataResult.StatusCode))
+		}
+		if !bytes.Contains(dataResult.Body, []byte(`"recording":true`)) {
+			return fail("management.handle", "GET traces Body 应含 recording:true: "+string(dataResult.Body))
 		}
 		if !bytes.Contains(dataResult.Body, []byte(`"requests"`)) {
 			return fail("management.handle", "GET traces Body 应含 requests 字段: "+string(dataResult.Body))

@@ -184,7 +184,7 @@ before/after-auth 共用格式处理：在条目锁内绑定首次非空 SourceF
 
 如果插件在注册信封中声明 `capabilities.management_api`（小写下划线，`rpcSchemaCapabilities` 无 omitempty），宿主会在重建路由表时逐插件调用 `management.register`；两个方法常量见 `$H/sdk/pluginabi/types.go:87-88`。本插件实现在 `management.go`，分发于 `abi.go` 的 fail-closed 路径之前（页面为静态内容，与实例状态无关）。
 
-**当前状态：管理可见性由双开关联动控制**（TD-11，2026-10-21 回写）：`panel.enabled` 且 `trace_enabled` 同时为 true 才可达（运行时取值保存在 `abi.go` 的 `abiState.panelEnabled`/`traceEnabled`，由最近一次成功的 `plugin.register`/`plugin.reconfigure` 写入，shutdown 与重新 init 经 `resetManagementLocked` 清除）。遵循官方开发文档"只声明实际实现的能力"的建议，任一开关为 false（含从未注册过）时注册信封**不声明** `capabilities.management_api`；`management.register` 返回空 `routes` 与 `resources`，`management.handle` 对一切请求返回 404。双开关同时开启时注册信封声明 `management_api`，`management.register` 返回两条数据管理路由与单个资源 `{Path:"trace", Menu:"隐私脱敏日志", ...}`（原 `panel` 资源路由已移除），`management.handle` 按 10.3 服务。`packaging/trace.html` 经 `go:embed` 嵌入；`packaging/panel.html` 不再嵌入，仅随 zip 分发作 `file://` 独立排障（不受开关影响）。
+**当前状态：管理可见性由双开关联动控制**（TD-11，2026-10-21 回写）：`panel.enabled` 且 `trace_enabled` 同时为 true 才可达（运行时取值保存在 `abi.go` 的 `abiState.panelEnabled`/`traceEnabled`，由最近一次成功的 `plugin.register`/`plugin.reconfigure` 写入，shutdown 与重新 init 经 `resetManagementLocked` 清除）。遵循官方开发文档"只声明实际实现的能力"的建议，任一开关为 false（含从未注册过）时注册信封**不声明** `capabilities.management_api`；`management.register` 返回空 `routes` 与 `resources`，`management.handle` 对一切请求返回 404。双开关同时开启时注册信封声明 `management_api`，`management.register` 返回三条数据管理路由与单个资源 `{Path:"trace", Menu:"隐私脱敏日志", ...}`（原 `panel` 资源路由已移除），`management.handle` 按 10.3 服务。`packaging/trace.html` 经 `go:embed` 嵌入；`packaging/panel.html` 不再嵌入，仅随 zip 分发作 `file://` 独立排障（不受开关影响）。
 
 ### 10.1 management.register
 
@@ -198,12 +198,15 @@ before/after-auth 共用格式处理：在条目锁内绑定首次非空 SourceF
 
 插件响应 `{"routes":[...],"resources":[...]}`（小写 tag `routes`/`resources`，见 `$H/internal/pluginhost/rpc_schema.go:131-134`）。**路由条目**解码为 `pluginapi.ManagementRoute`，该结构**无 JSON tag**（`$H/sdk/pluginapi/types.go:1429-1440`），故插件必须按 Go 默认键名编码 `Method`、`Path`、`Description`；`Menu` 与 `Handler` 字段不得出现（`Menu` 非空的 GET 路由会被宿主当旧式资源菜单，`Handler` 由宿主解码后补设，`rpc_client.go:619-641`）。资源条目字段名大写、**无 JSON tag**：`Path`、`Menu`、`Description`（`$H/sdk/pluginapi/types.go:1442-1454`）。`Menu` 非空的资源路由经 `$H/internal/pluginhost/snapshot.go:123-146`（`registeredPluginMenus`）暴露到 `GET /v0/management/plugins` 的 `menus` 字段，即管理界面菜单来源。
 
-双开关开启时本插件返回 `routes` 两条：
+双开关开启时本插件返回 `routes` 三条：
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/v0/management/privacygateway/traces` | 读取内存中的请求脱敏追踪快照 |
 | `DELETE` | `/v0/management/privacygateway/traces` | 清空内存中的追踪缓冲 |
+| `POST` | `/v0/management/privacygateway/traces/recording` | 开始/停止记录（body: `{"recording":true\|false}`） |
+
+追踪**默认不采集**（`trace_recording` 缺省 false）：注册后缓冲处于未记录态，点页面「开始记录」（或配置 `trace_recording: true`）才写入事件；开启时清空旧记录，停止时保留已有记录。
 
 `resources` 恒为单条 `{Path:"trace", Menu:"隐私脱敏日志", Description:"查看每个请求的脱敏/还原事件流（仅内存，不含原值）"}`；任一开关关闭时两者皆空（见 `management_trace.go` 的 `managementTraceRoutes`）。宿主按 `METHOD + 精确路径` 注册路由，相对路径会补到 `/v0/management` 下（`normalizeManagementRoute`，`$H/internal/pluginhost/management.go:120-154`），本插件直接给出完整路径避免歧义。
 
@@ -229,8 +232,11 @@ before/after-auth 共用格式处理：在条目锁内绑定首次非空 SourceF
 | **可见性关闭（`panel.enabled=false` 或 `trace_enabled=false`，TD-11）** | 404 | 纯文本 `privacy gateway management resource not found` |
 | `Method == GET` 且 `Path` 剪掉 query 后**完整等于** `/v0/management/privacygateway/traces`（即 10.1 注册的完整路径） | 200 | 追踪快照 JSON（见下）+ `Content-Type: application/json; charset=utf-8`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store` |
 | `Method == DELETE` 且同一完整路径 | 200 | `{"cleared":n}`（n 为清除的 Trace_Record 条数）+ 同上三个响应头 |
+| `Method == POST` 且路径为 `/v0/management/privacygateway/traces/recording`，body 为 `{"recording":true\|false}` | 200 | `{"recording":bool,"cleared":n}`（开启时 n 为被清空条数）+ 同上三个响应头 |
+| 同一 recording 路径，body 缺失/非 JSON/`recording` 非布尔 | 400 | 纯文本 `privacy gateway trace recording requires {"recording":true\|false}` |
+| 同一 recording 路径，`Method != POST` | 405 | 纯文本 + `Allow: POST` |
 | `Method == GET` 且 `Path` 归一化后为资源 `trace`（相对 `trace` 或完整 `/v0/resource/plugins/privacygateway/trace`） | 200 | `traceHTML` + `Content-Type: text/html; charset=utf-8`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store`、`Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'`、`Referrer-Policy: no-referrer` |
-| 数据路径上的 `Method` 非 GET/DELETE（仅双开关开启后可达） | 405 | 纯文本 + `Allow: GET, DELETE` |
+| 数据路径上的 `Method` 非 GET/DELETE（非 recording 路径，仅双开关开启后可达） | 405 | 纯文本 + `Allow: GET, DELETE` |
 | 页面路径上的 `Method != GET`（仅双开关开启后可达） | 405 | 纯文本 + `Allow: GET` |
 | 其他路径（仅双开关开启后可达） | 404 | 纯文本 |
 | 请求体无法解码（仅双开关开启后可达） | 400 | 纯文本 |
@@ -241,16 +247,17 @@ before/after-auth 共用格式处理：在条目锁内绑定首次非空 SourceF
 ```json
 {
   "version": "0.1.6",
-  "plugin": {"version": "0.1.6", "enabled": true, "fail_closed": true, "trace_enabled": true},
+  "plugin": {"version": "0.1.7", "enabled": true, "fail_closed": true, "trace_enabled": true, "trace_recording": true},
   "limits": {"max_requests": 200, "max_events": 64, "max_finding_details": 64},
-  "buffered": 3, "evicted": 0, "next_since": 7,
+  "recording": true, "buffered": 3, "evicted": 0, "next_since": 7,
   "requests": [{ "...Trace_Record：id/started_at/finished_at/request_id/trace_id/format/stream/outcome/status/duration_ms/partial + events 与 findings 明细...": "..." }]
 }
 ```
 
 - 查询参数 `limit`（1..`trace_max_requests`，越界回退 50）与 `since`（整数事件序号）由 `parseTraceQuery` 解析；`since=0` 返回全部快照，`since=next_since` 为增量轮询。
-- `plugin.trace_enabled` 取 `abiState`（可达时恒为 true，TD-11）；`plugin.version`/`limits.*` 为配置化字段。
+- `plugin.trace_enabled` 取 `abiState`（可达时恒为 true，TD-11）；`plugin.trace_recording` 与顶层 `recording` 反映当前记录开关（TD-12，关闭时仍可能保留历史记录）；`plugin.version`/`limits.*` 为配置化字段。
 - 资源通道 `/v0/resource/plugins/privacygateway/trace` 仅服务 HTML 页面，**永远** 404 JSON 数据（数据只走完整管理路径，R12.1）。
+- 宿主只注册插件在 `management.register` 中声明的 `METHOD + 精确路径`：对 recording 路径使用 GET/PUT 等未声明方法时，宿主在路由层直接 404，不会转发到插件（插件侧单独收到非 POST 时返回 405，见 10.3 表）。
 - 分发以"完整路径剪 query 后精确匹配"为主、资源前缀折叠为辅：`normalizeManagementPath` 只剪 query，不做 `plugins/<id>` 参数折叠，避免 `/v0/management/privacygateway/traces` 之外的路径被误配对。
 
 与 fail-closed 的关系：management 分发位于 `handleABIMethod` 的 fail-closed 路径**之外**（请求链路熔断不影响管理能力），但管理可达性独立地由注册态双开关（TD-11）决定：从未注册或关闭时 404。这与 §6 事实 6 的请求链路 fail-closed 语义无关。

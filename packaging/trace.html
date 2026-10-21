@@ -41,6 +41,7 @@ code { font-family: ui-monospace, monospace; }
     <option value="findings">有检出</option>
     <option value="errors">终止/失败/错误</option>
   </select>
+  <button id="record" type="button">开始记录</button>
   <button id="pause" type="button">暂停刷新</button>
   <button id="clear" type="button">清空日志</button>
 </div>
@@ -48,7 +49,7 @@ code { font-family: ui-monospace, monospace; }
 <div id="err" role="alert"></div>
 <div id="summary" hidden></div>
 <div id="list"></div>
-<div class="empty" id="empty" hidden>暂无请求。请通过 CPA 发送一次模型请求，再回到此页</div>
+<div class="empty" id="empty" hidden></div>
 <script>
 "use strict";
 const KEY = "privacygateway.managementKey";
@@ -62,6 +63,7 @@ const state = {
   since: 0, filter: "all",
   records: new Map(), order: [],
   nodes: new Map(), openIds: new Set(), paused: false,
+  recording: false, recordingBusy: false,
   limits: { max_requests: 200 },
   inflight: null, timer: null, timeoutId: null, timedOut: false
 };
@@ -397,6 +399,8 @@ function load() {
     }
     if (!resp.ok) throw new Error(httpMessage(resp.status));
     return resp.json().then(function (snap) {
+      if (!state.recordingBusy) state.recording = !!snap.recording;
+      syncRecordButton();
       mergeRequests(snap);
       render();
       renderSummary(snap);
@@ -479,6 +483,61 @@ el("filter").addEventListener("change", function () {
     load();
     startPolling();
   }
+});
+function syncRecordButton() {
+  el("record").textContent = state.recording ? "停止记录" : "开始记录";
+  updateEmptyText();
+}
+
+function updateEmptyText() {
+  setText("empty", state.recording
+    ? "暂无请求。请通过 CPA 发送一次模型请求，再回到此页"
+    : "未在记录。点击「开始记录」后才会采集请求日志（开启时会清空旧记录）");
+}
+
+function resetLocalRecords() {
+  state.records.clear();
+  state.order = [];
+  state.nodes.clear();
+  state.openIds.clear();
+  state.since = 0;
+  render();
+}
+
+function setRecording(on) {
+  if (!state.key) { setText("status", "请先输入 CPA 管理密钥并连接"); return; }
+  if (state.recordingBusy) return;
+  state.recordingBusy = true;
+  fetch(ORIGIN + DATA_PATH + "/recording", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + state.key, "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ recording: on })
+  }).then(function (resp) {
+    if (resp.status === 401 || resp.status === 403) {
+      failStop(httpMessage(resp.status));
+      throw new Error(httpMessage(resp.status));
+    }
+    if (!resp.ok) throw new Error(httpMessage(resp.status));
+    return resp.json().then(function (body) {
+      state.recording = !!body.recording;
+      syncRecordButton();
+      if (state.recording) {
+        resetLocalRecords();
+        setText("status", "记录中：新请求会实时出现在列表中");
+        load();
+      } else {
+        setText("status", "已停止记录：保留已有 " + state.order.length + " 条，不再新增");
+      }
+      setText("err", "");
+    });
+  }).catch(function (e) {
+    if (!state.stopped) setText("err", "切换记录状态失败：" + String(e && e.message ? e.message : e));
+  }).then(function () { state.recordingBusy = false; });
+}
+
+el("record").addEventListener("click", function () {
+  setRecording(!state.recording);
 });
 el("pause").addEventListener("click", function () {
   state.paused = !state.paused;

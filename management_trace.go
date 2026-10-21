@@ -15,6 +15,7 @@ const (
 	traceResourcePath = "trace"
 	// traceDataPath 是数据路由的完整管理路径（R12.1）：只有这个完整路径能取到数据。
 	traceDataPath      = "/v0/management/privacygateway/traces"
+	traceRecordingPath = traceDataPath + "/recording"
 	defaultTraceLimit  = 50
 	defaultTraceMaxReq = 200 // 与配置默认 trace_max_requests 一致（未注册时的 limit 上限）
 )
@@ -27,6 +28,7 @@ func managementTraceRoutes() abiManagementRegistrationResponse {
 		Routes: []abiManagementRoute{
 			{Method: "GET", Path: traceDataPath, Description: "读取内存中的请求脱敏追踪快照"},
 			{Method: "DELETE", Path: traceDataPath, Description: "清空内存中的追踪缓冲"},
+			{Method: "POST", Path: traceRecordingPath, Description: "开始/停止记录（body: {\"recording\":true|false}）"},
 		},
 		Resources: []abiResourceRoute{{
 			Path:        traceResourcePath,
@@ -57,6 +59,8 @@ func handleABIManagementTrace(ctx context.Context, request []byte) ([]byte, erro
 	switch {
 	case dataRoutePath(req.Path) == strings.Trim(traceDataPath, "/"):
 		return handleTraceData(ctx, req)
+	case dataRoutePath(req.Path) == strings.Trim(traceRecordingPath, "/"):
+		return handleTraceRecording(ctx, req)
 	case normalizeManagementPath(req.Path) == traceResourcePath:
 		return handleTracePage(req)
 	default:
@@ -111,6 +115,47 @@ func handleTraceData(ctx context.Context, req abiManagementHandleRequest) ([]byt
 		return handleTraceDataDelete(ctx)
 	default:
 		return abiOKEnvelope(managementTraceAllowResponse(http.StatusMethodNotAllowed, "GET, DELETE", "privacy gateway management trace data supports GET and DELETE"))
+	}
+}
+
+// handleTraceRecording 处理 POST .../traces/recording：开启时清空旧记录，
+// 关闭时保留已有记录供继续阅读（需求 7.6）。
+func handleTraceRecording(ctx context.Context, req abiManagementHandleRequest) ([]byte, error) {
+	if !managementVisible() {
+		return abiOKEnvelope(managementPlainTextResponse(http.StatusNotFound, "privacy gateway management resource not found"))
+	}
+	if req.Method != http.MethodPost {
+		return abiOKEnvelope(managementTraceAllowResponse(http.StatusMethodNotAllowed, "POST", "privacy gateway trace recording only supports POST"))
+	}
+	var body struct {
+		Recording *bool `json:"recording"`
+	}
+	if len(req.Body) == 0 || json.Unmarshal(req.Body, &body) != nil || body.Recording == nil {
+		return abiOKEnvelope(managementPlainTextResponse(http.StatusBadRequest, "privacy gateway trace recording requires {\"recording\":true|false}"))
+	}
+	abiState.RLock()
+	p := abiState.plugin
+	abiState.RUnlock()
+	if p == nil {
+		return abiOKEnvelope(traceRecordingResponse(false, 0))
+	}
+	on, cleared := p.traces.setRecording(*body.Recording)
+	logHost(ctx, logLevelInfo, "privacy gateway trace recording toggled", map[string]any{
+		"recording": on, "cleared": cleared,
+	})
+	return abiOKEnvelope(traceRecordingResponse(on, cleared))
+}
+
+func traceRecordingResponse(recording bool, cleared int) pluginapi.ManagementResponse {
+	body, _ := json.Marshal(map[string]any{"recording": recording, "cleared": cleared})
+	return pluginapi.ManagementResponse{
+		StatusCode: http.StatusOK,
+		Headers: http.Header{
+			"Content-Type":           []string{"application/json; charset=utf-8"},
+			"Cache-Control":          []string{"no-store"},
+			"X-Content-Type-Options": []string{"nosniff"},
+		},
+		Body: body,
 	}
 }
 
@@ -187,16 +232,18 @@ func traceJSONResponse(snap traceSnapshot) pluginapi.ManagementResponse {
 	payload := map[string]any{
 		"version": pluginVersion,
 		"plugin": map[string]any{
-			"version":       pluginVersion,
-			"enabled":       snapPluginEnabled(),
-			"fail_closed":   gatewayFailClosed(),
-			"trace_enabled": snap.Enabled,
+			"version":         pluginVersion,
+			"enabled":         snapPluginEnabled(),
+			"fail_closed":     gatewayFailClosed(),
+			"trace_enabled":   snap.Enabled,
+			"trace_recording": snap.Recording,
 		},
 		"limits": map[string]any{
 			"max_requests":        snapBufferedLimit(),
 			"max_events":          snapEventsLimit(),
 			"max_finding_details": maxFindingDetails,
 		},
+		"recording":  snap.Recording,
 		"buffered":   snap.Buffered,
 		"evicted":    snap.Evicted,
 		"next_since": snap.NextSince,

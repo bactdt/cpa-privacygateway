@@ -20,6 +20,7 @@ func pluginMetadata() pluginapi.Metadata {
 			{Name: "custom_rules", Type: pluginapi.ConfigFieldTypeArray, Description: "RE2 regular expressions for additional values to redact."},
 			{Name: "panel.enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Expose the built-in diagnostics panel as a management resource (default false)."},
 			{Name: "trace_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Record per-request redaction trace events into an in-memory ring buffer (default true)."},
+			{Name: "trace_recording", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Start recording trace events immediately after registration; when false (default) the trace page must be used to start recording."},
 			{Name: "trace_max_requests", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum number of request records kept in the trace buffer (default 200, range 1..2000)."},
 			{Name: "trace_max_events", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum trace events per request record (default 64, range 8..256)."},
 		},

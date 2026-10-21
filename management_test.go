@@ -108,9 +108,10 @@ func TestManagementEnabledByConfig(t *testing.T) {
 	if len(env.Result.Resources) != 1 || env.Result.Resources[0].Path != "trace" {
 		t.Errorf("panel.enabled=true 时应暴露 trace 资源：%s", raw)
 	}
-	// R10.1/R10.2：两条管理路由、完整管理路径、只含 method/path/description。
-	if len(env.Result.Routes) != 2 {
-		t.Fatalf("管理路由应为 2 条：%s", raw)
+	// R10.1/R10.2：三条管理路由（GET/DELETE/POST recording）、完整管理路径、
+	// 只含 method/path/description。
+	if len(env.Result.Routes) != 3 {
+		t.Fatalf("管理路由应为 3 条：%s", raw)
 	}
 	for _, route := range env.Result.Routes {
 		// R10.2：宿主按 Go 默认键名（Method/Path/Description）解码，
@@ -120,13 +121,18 @@ func TestManagementEnabledByConfig(t *testing.T) {
 				t.Errorf("管理路由不应编码 %s 字段：%s", forbidden, route)
 			}
 		}
-		var gotPath string
+		var gotPath, gotMethod string
 		_ = json.Unmarshal(route["Path"], &gotPath)
-		if gotPath != "/v0/management/privacygateway/traces" {
-			t.Errorf("管理路由 Path = %q，期望完整管理路径", gotPath)
+		_ = json.Unmarshal(route["Method"], &gotMethod)
+		wantPath := "/v0/management/privacygateway/traces"
+		if gotMethod == "POST" {
+			wantPath += "/recording"
+		}
+		if gotPath != wantPath {
+			t.Errorf("管理路由 Path = %q，期望 %q", gotPath, wantPath)
 		}
 	}
-	for _, wantMethod := range []string{"GET", "DELETE"} {
+	for _, wantMethod := range []string{"GET", "DELETE", "POST"} {
 		found := false
 		for _, route := range env.Result.Routes {
 			var gotMethod string

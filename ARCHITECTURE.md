@@ -92,12 +92,14 @@ janitor（每分钟）                      → 清理 TTL 过期条目
 redact 检测命中  → Finding{Kind, Path, Count, Preview}   Preview = MaskPreview(原值)，原值不出 redact
                      → WalkOptions.OnFinding 收集器（nil 即零成本旁路）
 trace_hooks.go     → Trace_Buffer 环形缓冲（trace_max_requests × trace_max_events，仅内存）
+                     记录开关默认关（trace_recording=false）：页面 POST /traces/recording 或配置开启后才采集
    四拦截器挂钩      → 阶段事件（request.before_auth/after_auth/response.restored/stream.* 等）
    HandleRequestComplete → duration_ms / outcome 落账 + 冲刷
 GET/DELETE /v0/management/privacygateway/traces → 页面轮询（不落宿主日志，RT-3）
+POST /v0/management/privacygateway/traces/recording → 开始/停止记录（开启清空旧记录）
 ```
 
-旁路原则：观测失败（panic/超限/丢弃）不得改变拦截器返回值与脱敏结果；`trace_enabled=false` 时缓冲清空且入口单次开关读取即返回（架构不变量 R-1/R-2 不受影响：`redact` 仍不反向依赖 `main`，收集器经回调注入）。
+旁路原则：观测失败（panic/超限/丢弃）不得改变拦截器返回值与脱敏结果；`trace_enabled=false` 时缓冲清空且入口单次开关读取即返回；`trace_recording=false`（默认）时同样单次读取即返回，不产生记录（架构不变量 R-1/R-2 不受影响：`redact` 仍不反向依赖 `main`，收集器经回调注入）。
 
 ## 4. 关键不变量
 

@@ -32,7 +32,7 @@ func TestLifecycleTraceBufferInitAndShutdown(t *testing.T) {
 	}()
 
 	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
-		lifecycleRequest(t, []byte("enabled: true\ntrace_enabled: true\ntrace_max_requests: 5\ntrace_max_events: 8\n"))); err != nil {
+		lifecycleRequest(t, []byte("enabled: true\ntrace_enabled: true\ntrace_recording: true\ntrace_max_requests: 5\ntrace_max_events: 8\n"))); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	abiState.RLock()
@@ -57,5 +57,43 @@ func TestLifecycleTraceBufferInitAndShutdown(t *testing.T) {
 	if p.traces.traceOn() || len(p.traces.snapshot(0, 10, "").Requests) != 0 {
 		t.Errorf("shutdown 后应清空并关闭追踪: on=%v n=%d",
 			p.traces.traceOn(), len(p.traces.snapshot(0, 10, "").Requests))
+	}
+}
+
+// 需求 7.6：未配置 trace_recording 时注册后默认不记录，请求事件不落缓冲。
+func TestLifecycleTraceRecordingDefaultOff(t *testing.T) {
+	abiState.Lock()
+	abiState.shuttingDown = false
+	previousPlugin := abiState.plugin
+	abiState.Unlock()
+	defer func() {
+		abiState.Lock()
+		abiState.plugin = previousPlugin
+		abiState.Unlock()
+	}()
+
+	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
+		lifecycleRequest(t, []byte("enabled: true\ntrace_enabled: true\n"))); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	abiState.RLock()
+	p := abiState.plugin
+	abiState.RUnlock()
+	if p == nil {
+		t.Fatal("register 后 plugin 应非空")
+	}
+	if p.traces.traceOn() {
+		t.Fatal("默认 trace_recording=false，注册后不应立即记录")
+	}
+	p.traces.record("r1", "t1", "request.received", nil)
+	if n := len(p.traces.snapshot(0, 10, "").Requests); n != 0 {
+		t.Errorf("默认不记录时不应新增记录，实际 %d 条", n)
+	}
+	if got, cleared := p.traces.setRecording(true); !got || cleared != 0 {
+		t.Errorf("页面开启记录应成功，实际 (%v,%d)", got, cleared)
+	}
+	p.traces.record("r1", "t1", "request.received", nil)
+	if n := len(p.traces.snapshot(0, 10, "").Requests); n != 1 {
+		t.Errorf("开启记录后应采集，实际 %d 条", n)
 	}
 }

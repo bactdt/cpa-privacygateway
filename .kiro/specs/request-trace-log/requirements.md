@@ -136,13 +136,16 @@
 
 #### Acceptance Criteria
 
-1. WHEN `plugin.register` 成功，THE Plugin SHALL 按配置中的 `trace_enabled`、`trace_max_requests`、`trace_max_events` 初始化 Trace_Buffer。
+1. WHEN `plugin.register` 成功，THE Plugin SHALL 按配置中的 `trace_enabled`、`trace_recording`、`trace_max_requests`、`trace_max_events` 初始化 Trace_Buffer。
 2. WHEN `plugin.reconfigure` 成功，THE Plugin SHALL 保留 Trace_Buffer 中已有的 Trace_Record 并应用新的上限。
 3. WHEN 重配后的 `trace_max_requests` 小于当前 Trace_Record 数，THE Trace_Buffer SHALL 按首次出现顺序淘汰最旧的记录，直至记录数等于新上限。
 4. WHEN `trace_enabled` 变为 false，THE Trace_Buffer SHALL 清空全部 Trace_Record 并停止记录，且 Redactor 收到的 Finding_Sink 为 nil。
 5. WHILE `trace_enabled` 为 false，THE Trace_Recorder SHALL 在每个记录入口只做一次开关读取即返回。
 6. WHEN Plugin 收到 `shutdown` 调用，THE Plugin SHALL 清空 Trace_Buffer 并关闭记录。
 7. THE Interceptors SHALL 在 `trace_enabled` 为 true 与为 false 时对相同输入返回相同的结果。
+8. THE Config_Parser SHALL 将布尔配置 `trace_recording` 缺省取 false：注册完成后 Trace_Buffer 处于未记录状态，只有配置为 true 或经管理页面点击「开始记录」后才采集事件。
+9. WHEN 记录开关由关变开，THE Trace_Buffer SHALL 先清空已有 Trace_Record 再开始采集；由开变关 SHALL 保留已有记录并停止采集，且不因停止而丢弃可读数据。
+10. WHEN 某 Trace_Record 的首个事件不是 `request.received`（记录在请求中途开启），THE Trace_Buffer SHALL 将该记录的 `partial` 置为 true。
 
 ### Requirement 8: 按阶段记录请求事件
 
@@ -181,7 +184,7 @@
 
 #### Acceptance Criteria
 
-1. WHEN Host 调用 `management.register`，THE Management_Handler SHALL 返回两条管理路由：`GET /v0/management/privacygateway/traces` 与 `DELETE /v0/management/privacygateway/traces`。
+1. WHEN Host 调用 `management.register`，THE Management_Handler SHALL 返回三条管理路由：`GET /v0/management/privacygateway/traces`、`DELETE /v0/management/privacygateway/traces` 与 `POST /v0/management/privacygateway/traces/recording`。
 2. THE Management_Handler SHALL 以仅含 `Method`、`Path`、`Description` 三个字段的形式编码每条管理路由，使 `Menu` 与 `Handler` 不出现在注册响应中。
 3. WHEN Host 调用 `management.register`，THE Management_Handler SHALL 返回唯一一条资源路由 `{Path:"trace", Menu:"隐私脱敏日志"}`，替换原 `panel` 资源路由。
 4. THE Trace_Data_Route SHALL 使用 `/v0/management/privacygateway/traces` 路径，位于 Host 管理鉴权前缀 `/v0/management/` 下且不在 Host 的 `/v0/management/plugins/` 参数路由树下。
@@ -193,7 +196,7 @@
 
 #### Acceptance Criteria
 
-1. WHEN Trace_Data_Route 收到 GET 请求，THE Management_Handler SHALL 返回 200 与 JSON 对象，字段为 `version`、`plugin`（`version`、`enabled`、`fail_closed`、`trace_enabled`）、`limits`（`max_requests`、`max_events`、`max_finding_details`）、`buffered`、`evicted`、`next_since` 与 `requests`。
+1. WHEN Trace_Data_Route 收到 GET 请求，THE Management_Handler SHALL 返回 200 与 JSON 对象，字段为 `version`、`plugin`（`version`、`enabled`、`fail_closed`、`trace_enabled`、`trace_recording`）、`limits`（`max_requests`、`max_events`、`max_finding_details`）、`recording`、`buffered`、`evicted`、`next_since` 与 `requests`。
 2. THE Management_Handler SHALL 在 `requests` 中按 `first_seen` 倒序返回不超过 `limit` 条 Trace_Record，每条含 `request_id`、`trace_id`、`anonymous`、`partial`、`first_seen`、`updated_seq`、`outcome`、`status`、`terminated`、`has_error`、`finding_total`、`counts`、`dropped_events`、`findings_truncated` 与 `events`。
 3. THE Management_Handler SHALL 将 `limit` 默认取 50，有效范围为 1 至 `trace_max_requests`。
 4. WHEN GET 请求携带 `since`，THE Management_Handler SHALL 只返回 `updated_seq` 大于 `since` 的 Trace_Record。
@@ -204,7 +207,8 @@
 9. THE Management_Handler SHALL 为 Trace_Data_Route 响应设置 `Content-Type: application/json; charset=utf-8`、`Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`。
 10. WHEN Trace_Data_Route 收到 DELETE 请求，THE Management_Handler SHALL 清空 Trace_Buffer 并返回 200 与 `{"cleared":n}`，n 为清空前的记录数。
 11. IF Trace_Data_Route 收到 GET 与 DELETE 以外的方法，THEN THE Management_Handler SHALL 返回 405 与 `Allow: GET, DELETE`。
-12. WHERE `trace_enabled` 为 false，THE 管理通道 SHALL 按 TD-11 不可达（`management_api` 不声明、数据路由 404）；`trace_enabled` 字段保留在响应结构中，可达时恒为 true。
+12. WHEN Trace_Recording_Route 收到 POST 且 body 为 `{"recording":true|false}`，THE Management_Handler SHALL 返回 200 与 `{"recording":bool,"cleared":n}`；body 缺失、非 JSON 或缺少布尔 `recording` 字段时返回 400；非 POST 方法返回 405 与 `Allow: POST`；可见性关闭或经资源通道访问时返回 404。
+13. WHERE `trace_enabled` 为 false，THE 管理通道 SHALL 按 TD-11 不可达（`management_api` 不声明、数据路由 404）；`trace_enabled` 字段保留在响应结构中，可达时恒为 true。
 
 ### Requirement 12: 管理分发与数据隔离
 
@@ -260,14 +264,16 @@
 1. THE Trace_Page SHALL 只通过 `textContent` 与 `createElement` 渲染来自 Trace_Data_Route 的数据，且页面源码不含 `innerHTML`。
 2. THE Trace_Page SHALL 在汇总区显示插件版本、`enabled`、`fail_closed`、缓冲占用（`buffered`/`max_requests`）与 `evicted`。
 3. THE Trace_Page SHALL 为每个 Trace_Record 显示首次时间、RequestID、`trace_id`、格式、是否流式、`outcome`、`status`、耗时与各 Kind 检出数，并按相对首事件的毫秒偏移列出全部 Trace_Event。
-4. WHEN Trace_Record 含 after_auth 事件，THE Trace_Page SHALL 按 `attempt` 分组显示"第 n 次凭据尝试"，并汇总新增项数与复用项数。
+4. WHEN Trace_Record 含 after_auth 事件，THE Trace_Page SHALL 按时间顺序在对应位置显示"第 n 次凭据尝试"标题，并汇总该次尝试的新增项数与复用项数（无新增时显示"无新增检出（沿用已有映射）"）。
 5. WHILE 未输入管理密钥，THE Trace_Page SHALL 显示"请输入 CPA 管理密钥"。
 6. WHILE 已连接且 `requests` 为空，THE Trace_Page SHALL 显示"暂无请求。请通过 CPA 发送一次模型请求，再回到此页"。
 7. IF `panel.enabled` 或 `trace_enabled` 为 false（TD-11），THEN THE Trace_Page SHALL 返回 404 不可达；页面 SHALL 保留对 GET 响应 `trace_enabled: false` 的防御性提示渲染（"追踪已关闭：在配置中设置 `trace_enabled: true`"）。
 8. WHILE GET 响应中插件 `enabled` 为 false，THE Trace_Page SHALL 显示"插件总开关关闭，请求不会被脱敏，也不会被记录"。
 9. WHEN 用户点击"清空日志"，THE Trace_Page SHALL 先请求二次确认，确认后发送 DELETE，成功后清空本地列表并将 `since` 重置为 0。
 10. THE Trace_Page SHALL 用颜色区分终止或失败（红）、fail_open 放行（橙）、正常（绿）与信息（灰），并同时显示图标与文字。
-11. THE Trace_Page SHALL 为每个输入控件提供 `<label>`，以 `<details>`/`<summary>` 呈现请求条目，为状态区设置 `role="status"` 与 `aria-live="polite"`，为错误区设置 `role="alert"`，并保留可见的焦点样式。
+11. THE Trace_Page SHALL 提供「开始记录/停止记录」按钮：点击后 POST Trace_Recording_Route，按响应更新按钮与状态；开始记录时清空本地列表并将 `since` 置 0，停止后保留已有列表。
+12. THE Trace_Page SHALL 增量渲染记录列表：`request_id` 与 `updated_seq` 均未变化的记录不得重建 DOM，以保持已展开的 `<details>` 与当前滚动位置；页面 SHALL 提供暂停/继续刷新按钮，暂停期间不发起轮询。
+13. THE Trace_Page SHALL 为每个输入控件提供 `<label>`，以 `<details>`/`<summary>` 呈现请求条目，为状态区设置 `role="status"` 与 `aria-live="polite"`，为错误区设置 `role="alert"`，并保留可见的焦点样式。
 
 ### Requirement 16: 管理密钥存储
 
@@ -290,8 +296,9 @@
 2. THE Config_Parser SHALL 支持整数配置 `trace_max_requests`，缺省时取 200，有效范围为 1 至 2000。
 3. THE Config_Parser SHALL 支持整数配置 `trace_max_events`，缺省时取 64，有效范围为 8 至 256。
 4. IF `trace_max_requests` 或 `trace_max_events` 超出有效范围，THEN THE Config_Parser SHALL 返回错误，使初次注册失败、重配保留旧配置。
-5. THE Plugin SHALL 在插件元数据的 `ConfigFields` 中声明 `trace_enabled`、`trace_max_requests` 与 `trace_max_events`，并使 `config.example.yaml`、包内 `config.snippet.yaml` 与 `ConfigFields` 的键集合一致。
-6. THE Readme SHALL 说明三个 `trace_*` 配置项的默认值、范围与内存代价（默认最坏约 6 MiB，上限值约 160 MiB）。
+5. THE Plugin SHALL 在插件元数据的 `ConfigFields` 中声明 `trace_enabled`、`trace_recording`、`trace_max_requests` 与 `trace_max_events`，并使 `config.example.yaml`、包内 `config.snippet.yaml` 与 `ConfigFields` 的键集合一致。
+6. THE Readme SHALL 说明 `trace_*` 配置项的默认值、范围与内存代价（默认最坏约 6 MiB，上限值约 160 MiB）。
+7. THE Config_Parser SHALL 支持布尔配置 `trace_recording`，缺省时取 false（默认不记录，需页面点击「开始记录」或显式配置为 true）。
 
 ### Requirement 18: TraceID 关联显示
 

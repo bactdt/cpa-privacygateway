@@ -66,7 +66,7 @@ func TestTraceDataGetShapeAndQuery(t *testing.T) {
 
 	// 默认查询：since=0, limit=50, filter=""
 	payload := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath))
-	for _, key := range []string{"version", "plugin", "limits", "buffered", "evicted", "next_since", "requests"} {
+	for _, key := range []string{"version", "plugin", "limits", "recording", "buffered", "evicted", "next_since", "requests"} {
 		if _, ok := payload[key]; !ok {
 			t.Errorf("traces 响应缺少字段 %q：%s", key, payload)
 		}
@@ -379,8 +379,126 @@ func registerTrace(t *testing.T, yaml string) {
 		lifecycleRequest(t, []byte(yaml))); err != nil {
 		t.Fatalf("register: %v", err)
 	}
+	// 直接写缓冲的用例默认已开始记录；记录开关本身的用例会显式关闭。
+	abiState.RLock()
+	p := abiState.plugin
+	abiState.RUnlock()
+	if p != nil {
+		p.traces.setRecording(true)
+	}
 }
 
 func itoa64(v int64) string {
 	return strconv.FormatInt(v, 10)
+}
+
+func callManagementWithBody(t *testing.T, httpMethod, path, body string) pluginapi.ManagementResponse {
+	t.Helper()
+	payload, _ := json.Marshal(pluginapi.ManagementRequest{Method: httpMethod, Path: path, Body: []byte(body)})
+	return callManagementRaw(t, pluginabi.MethodManagementHandle, payload)
+}
+
+// 需求 7.6：页面通过 POST .../traces/recording 开始/停止记录；
+// 关闭时保留已有记录，开启时清空旧记录。
+func TestTraceRecordingEndpoint(t *testing.T) {
+	enablePanelForTrace(t)
+	registerTrace(t, "panel:\n  enabled: true\ntrace_enabled: true\n")
+	abiState.RLock()
+	p := abiState.plugin
+	abiState.RUnlock()
+	p.traces.setRecording(false)
+
+	p.traces.record("r0", "t0", "request.received", nil)
+	if n := len(p.traces.snapshot(0, 10, "").Requests); n != 0 {
+		t.Fatalf("停止状态不应采集，实际 %d 条", n)
+	}
+	initial := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath))
+	if got := mustBool(t, initial["recording"]); got {
+		t.Error("初始 recording 应为 false")
+	}
+	var plug map[string]json.RawMessage
+	_ = json.Unmarshal(initial["plugin"], &plug)
+	if got := mustBool(t, plug["trace_recording"]); got {
+		t.Error("初始 plugin.trace_recording 应为 false")
+	}
+
+	start := callManagementWithBody(t, http.MethodPost, traceRecordingPath, `{"recording":true}`)
+	if start.StatusCode != http.StatusOK {
+		t.Fatalf("POST recording=true status = %d，期望 200：%s", start.StatusCode, start.Body)
+	}
+	var started struct {
+		Recording bool `json:"recording"`
+		Cleared   int  `json:"cleared"`
+	}
+	if errDecode := json.Unmarshal(start.Body, &started); errDecode != nil {
+		t.Fatalf("POST 响应解码失败：%v (%s)", errDecode, start.Body)
+	}
+	if !started.Recording {
+		t.Error("POST recording=true 应返回 recording=true")
+	}
+	p.traces.record("r1", "t1", "request.received", nil)
+	on := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath))
+	if got := mustBool(t, on["recording"]); !got {
+		t.Error("开启后 GET recording 应为 true")
+	}
+	var onReqs []map[string]any
+	_ = json.Unmarshal(on["requests"], &onReqs)
+	if len(onReqs) != 1 || onReqs[0]["request_id"] != "r1" {
+		t.Errorf("开启后应采集 r1：%s", on["requests"])
+	}
+
+	stop := callManagementWithBody(t, http.MethodPost, traceRecordingPath, `{"recording":false}`)
+	if stop.StatusCode != http.StatusOK {
+		t.Fatalf("POST recording=false status = %d，期望 200", stop.StatusCode)
+	}
+	p.traces.record("r2", "t2", "request.received", nil)
+	off := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath))
+	if got := mustBool(t, off["recording"]); got {
+		t.Error("停止后 GET recording 应为 false")
+	}
+	var offReqs []map[string]any
+	_ = json.Unmarshal(off["requests"], &offReqs)
+	if len(offReqs) != 1 {
+		t.Errorf("停止后应保留已有记录且不新增，实际 %d 条", len(offReqs))
+	}
+}
+
+// 需求 7.6/10：记录开关同样受管理可见性约束，只接受 POST + 合法 JSON。
+func TestTraceRecordingEndpointContract(t *testing.T) {
+	resetABIState(t)
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		if got := callManagement(t, method, traceRecordingPath).StatusCode; got != http.StatusNotFound {
+			t.Errorf("panel.enabled=false 时 %s recording status = %d，期望 404", method, got)
+		}
+	}
+
+	enablePanelForTrace(t)
+	registerTrace(t, "panel:\n  enabled: true\ntrace_enabled: true\n")
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		resp := callManagement(t, method, traceRecordingPath)
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("%s recording status = %d，期望 405", method, resp.StatusCode)
+		}
+		if got := resp.Headers.Get("Allow"); got != "POST" {
+			t.Errorf("%s recording Allow = %q，期望 POST", method, got)
+		}
+	}
+	for _, body := range []string{"", "{}", `{"recording":"yes"}`, "not-json"} {
+		if got := callManagementWithBody(t, http.MethodPost, traceRecordingPath, body).StatusCode; got != http.StatusBadRequest {
+			t.Errorf("body %q status = %d，期望 400", body, got)
+		}
+	}
+	// 不可通过资源通道操作记录开关。
+	if got := callManagement(t, http.MethodPost, "/v0/resource/plugins/privacygateway/traces/recording").StatusCode; got != http.StatusNotFound {
+		t.Errorf("资源通道 recording status = %d，期望 404", got)
+	}
+}
+
+func mustBool(t *testing.T, raw json.RawMessage) bool {
+	t.Helper()
+	var v bool
+	if errDecode := json.Unmarshal(raw, &v); errDecode != nil {
+		t.Fatalf("bool 解码失败：%v (%s)", errDecode, raw)
+	}
+	return v
 }

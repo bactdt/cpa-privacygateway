@@ -51,8 +51,11 @@ CLIProxyAPI（CPA）隐私脱敏网关插件：请求发往上游前把凭据与
   `DELETE` 同路径清空缓冲，返回 `{"cleared":n}`。
 - 页面可见性 = `panel.enabled` 且 `trace_enabled`；数据缓冲仅内存、重启即清空。
 
-追踪相关配置（全部可省略）：`trace_enabled`（默认 `true`）、`trace_max_requests`（默认 `200`，范围 1..2000）、
-`trace_max_events`（默认 `64`，范围 8..256，单请求事件上限，Finding 明细上限 64）。
+追踪相关配置（全部可省略）：`trace_enabled`（默认 `true`）、`trace_recording`（默认 `false`，注册后是否立即记录）、
+`trace_max_requests`（默认 `200`，范围 1..2000）、`trace_max_events`（默认 `64`，范围 8..256，单请求事件上限，Finding 明细上限 64）。
+
+页面默认处于「未在记录」状态：点「开始记录」才开始采集（会清空旧记录），点「停止记录」后已有记录仍可阅读；
+「暂停刷新」只停页面轮询，不影响记录开关。
 最坏情形内存约 6 MiB（200 请求 × 64 事件的仅内存环形缓冲）；`trace_enabled: false` 清空缓冲并隐藏管理页面。
 
 包内 `panel.html` 保留为 file:// 本地排障用的旧版检测面板，不随插件注册。

@@ -14,7 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-const pluginVersion = "0.1.6"
+const pluginVersion = "0.1.7"
 
 var supportedFormats = map[string]bool{
 	"openai":          true,
@@ -43,6 +43,7 @@ func newPlugin(cfg config) *plugin {
 	}
 	maxRequests, maxEvents := cfg.traceLimits()
 	p.traces.configure(cfg.traceOn(), maxRequests, maxEvents)
+	p.traces.setRecording(cfg.traceRecording())
 	return p
 }
 
@@ -61,6 +62,7 @@ func (p *plugin) reconfigure(cfg config) {
 	p.states.setLimits(cfg.MaxConcurrency, cfg.MaxRequests, cfg.ttl())
 	maxRequests, maxEvents := cfg.traceLimits()
 	p.traces.configure(cfg.traceOn(), maxRequests, maxEvents)
+	p.traces.setRecording(cfg.traceRecording())
 }
 
 func (p *plugin) settings() (config, redact.Config) {

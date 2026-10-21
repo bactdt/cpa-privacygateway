@@ -39,6 +39,7 @@ type traceRecord struct {
 type traceBuffer struct {
 	mu          sync.Mutex
 	enabled     bool
+	recording   bool
 	maxRequests int
 	maxEvents   int
 	records     map[string]*traceRecord
@@ -52,7 +53,8 @@ type traceBuffer struct {
 const maxFindingDetails = 64 // 需求 6.6：每记录 Finding 明细上限
 
 func newTraceBuffer() *traceBuffer {
-	return &traceBuffer{records: map[string]*traceRecord{}, recentLost: map[string]bool{}}
+	// 容器本身默认记录；是否记录由 plugin 按配置/页面开关注入（setRecording）。
+	return &traceBuffer{recording: true, records: map[string]*traceRecord{}, recentLost: map[string]bool{}}
 }
 
 // configure 应用开关与容量；关闭时清空全部记录（需求 7.4）。
@@ -63,6 +65,7 @@ func (b *traceBuffer) configure(enabled bool, maxRequests, maxEvents int) {
 	b.enabled = enabled
 	b.maxRequests, b.maxEvents = maxRequests, maxEvents
 	if !enabled {
+		b.recording = false
 		b.records = map[string]*traceRecord{}
 		b.order = nil
 		b.recentLost = map[string]bool{}
@@ -74,11 +77,45 @@ func (b *traceBuffer) configure(enabled bool, maxRequests, maxEvents int) {
 	}
 }
 
-// traceOn 报告追踪是否开启（拦截器快速路径，需求 7.5）。
+// traceOn 报告是否正在记录（拦截器快速路径，需求 7.5/7.6）：
+// 配置开关打开且页面已点「开始记录」才为真。
 func (b *traceBuffer) traceOn() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.enabled
+	return b.enabled && b.recording
+}
+
+// recordingOn 报告记录开关状态（页面按钮与 GET 响应用）。
+func (b *traceBuffer) recordingOn() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.enabled && b.recording
+}
+
+// setRecording 开关记录：由关到开时清空旧记录，返回(turnedOn, cleared)，
+// 保证一次记录会话只包含点击「开始记录」之后发生的请求（需求 7.6）。
+// 关闭时保留已有记录，便于继续阅读。追踪总开关关闭时无法开始记录。
+func (b *traceBuffer) setRecording(on bool) (bool, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.enabled {
+		b.recording = false
+		return false, 0
+	}
+	if b.recording == on {
+		return on, 0
+	}
+	b.recording = on
+	if !on {
+		return false, 0
+	}
+	cleared := len(b.records)
+	b.records = map[string]*traceRecord{}
+	b.order = nil
+	b.recentLost = map[string]bool{}
+	b.lostOrder = nil
+	b.evicted = 0
+	return true, cleared
 }
 
 // record 追加一条事件；RequestID 为空时以 anon-<seq> 合成键（需求 6.8）。
@@ -96,11 +133,15 @@ func (b *traceBuffer) recordMode(requestID, traceID, stage string, fields map[st
 	defer func() { _ = recover() }() // 需求 6.9
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.enabled {
+	if !b.enabled || !b.recording {
 		return
 	}
 	b.seq++
-	rec := b.lookupOrCreateLocked(requestID)
+	rec, created := b.lookupOrCreateLocked(requestID)
+	if created && stage != "request.received" {
+		// 记录中途开启：该请求更早的阶段没有被采集。
+		rec.Partial = true
+	}
 	if replaceLast && len(rec.Events) > 0 && rec.Events[len(rec.Events)-1].Stage == stage {
 		last := &rec.Events[len(rec.Events)-1]
 		last.Seq = b.seq
@@ -136,13 +177,13 @@ func (b *traceBuffer) evictOldestLocked() {
 
 // lookupOrCreateLocked 查找或新建记录；满员时淘汰最旧（需求 6.2），
 // 被本缓冲淘汰后再次出现的请求则新建并标记 partial（需求 6.3）。
-func (b *traceBuffer) lookupOrCreateLocked(requestID string) *traceRecord {
+func (b *traceBuffer) lookupOrCreateLocked(requestID string) (*traceRecord, bool) {
 	key := requestID
 	if key == "" {
 		key = fmt.Sprintf("anon-%d", b.seq)
 	}
 	if rec, ok := b.records[key]; ok {
-		return rec
+		return rec, false
 	}
 	partial := requestID != "" && b.recentLost[key]
 	if partial {
@@ -159,7 +200,7 @@ func (b *traceBuffer) lookupOrCreateLocked(requestID string) *traceRecord {
 	}
 	b.records[key] = rec
 	b.order = append(b.order, key)
-	return rec
+	return rec, true
 }
 
 // appendEventLocked 追加事件并更新记录汇总字段。
@@ -243,6 +284,7 @@ func (b *traceBuffer) clear() int {
 // traceSnapshot 是 GET 响应的数据部分。
 type traceSnapshot struct {
 	Enabled   bool           `json:"trace_enabled"`
+	Recording bool           `json:"recording"`
 	Buffered  int            `json:"buffered"`
 	Evicted   int64          `json:"evicted"`
 	NextSince int64          `json:"next_since"`
@@ -254,7 +296,7 @@ type traceSnapshot struct {
 func (b *traceBuffer) snapshot(since int64, limit int, filter string) traceSnapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	snap := traceSnapshot{Enabled: b.enabled, NextSince: b.seq, Evicted: b.evicted}
+	snap := traceSnapshot{Enabled: b.enabled, Recording: b.enabled && b.recording, NextSince: b.seq, Evicted: b.evicted}
 	if !b.enabled {
 		snap.Requests = []*traceRecord{}
 		return snap

@@ -48,6 +48,7 @@ type config struct {
 	Panel               panelConfig    `yaml:"panel"`
 	// RT-1 追踪（TD-5：开箱可见）。默认 true/200/64。
 	TraceEnabled     *bool `yaml:"trace_enabled"`
+	TraceRecording   *bool `yaml:"trace_recording"`
 	TraceMaxRequests int   `yaml:"trace_max_requests"`
 	TraceMaxEvents   int   `yaml:"trace_max_events"`
 }
@@ -124,6 +125,12 @@ func (c config) failClosed() bool {
 // traceOn 读取追踪开关；nil 视为 true（TD-5：开箱可见）。
 func (c config) traceOn() bool {
 	return c.TraceEnabled == nil || *c.TraceEnabled
+}
+
+// traceRecording 读取记录开关；nil 视为 false（需求 7.6：默认不记录，
+// 由页面「开始记录」或配置 trace_recording: true 开启）。
+func (c config) traceRecording() bool {
+	return c.TraceRecording != nil && *c.TraceRecording
 }
 
 // traceLimits 返回经范围钳制后的缓冲容量。
