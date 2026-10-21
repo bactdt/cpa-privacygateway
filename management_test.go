@@ -99,6 +99,7 @@ func TestManagementEnabledByConfig(t *testing.T) {
 				Path string `json:"Path"`
 				Menu string `json:"Menu"`
 			} `json:"resources"`
+			Routes []map[string]json.RawMessage `json:"routes"`
 		} `json:"result"`
 	}
 	if errDecode := json.Unmarshal(raw, &env); errDecode != nil || !env.OK {
@@ -106,6 +107,36 @@ func TestManagementEnabledByConfig(t *testing.T) {
 	}
 	if len(env.Result.Resources) != 1 || env.Result.Resources[0].Path != "trace" {
 		t.Errorf("panel.enabled=true 时应暴露 trace 资源：%s", raw)
+	}
+	// R10.1/R10.2：两条管理路由、完整管理路径、只含 method/path/description。
+	if len(env.Result.Routes) != 2 {
+		t.Fatalf("管理路由应为 2 条：%s", raw)
+	}
+	for _, route := range env.Result.Routes {
+		if _, hasMenu := route["Menu"]; hasMenu {
+			t.Errorf("管理路由不应编码 Menu 字段：%s", route)
+		}
+		if _, hasHandler := route["Handler"]; hasHandler {
+			t.Errorf("管理路由不应编码 Handler 字段：%s", route)
+		}
+		var gotPath string
+		_ = json.Unmarshal(route["path"], &gotPath)
+		if gotPath != "/v0/management/privacygateway/traces" {
+			t.Errorf("管理路由 path = %q，期望完整管理路径", gotPath)
+		}
+	}
+	for _, wantMethod := range []string{"GET", "DELETE"} {
+		found := false
+		for _, route := range env.Result.Routes {
+			var gotMethod string
+			_ = json.Unmarshal(route["method"], &gotMethod)
+			if gotMethod == wantMethod {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("缺少 %s 管理路由：%s", wantMethod, raw)
+		}
 	}
 
 	resp := callManagement(t, http.MethodGet, "trace")

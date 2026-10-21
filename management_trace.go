@@ -13,20 +13,20 @@ import (
 
 const (
 	traceResourcePath = "trace"
-	traceDataPath     = "traces"
-	defaultTraceLimit = 50
-	maxTraceLimit     = 2000
+	// traceDataPath 是数据路由的完整管理路径（R12.1）：只有这个完整路径能取到数据。
+	traceDataPath      = "/v0/management/privacygateway/traces"
+	defaultTraceLimit  = 50
+	defaultTraceMaxReq = 200 // 与配置默认 trace_max_requests 一致（未注册时的 limit 上限）
 )
 
-// managementTraceRoutes 返回 trace 数据路由与资源路由（需求 12.1–12.4）。
-// 数据路由 GET / DELETE /v0/management/privacygateway/traces（鉴权），
+// managementTraceRoutes 返回 trace 数据路由与资源路由（需求 10.1–10.4）。
+// 数据路由 GET / DELETE 完整管理路径（鉴权），
 // 资源路由 {Path:"trace"}（不经鉴权，服务内嵌页面）。
 func managementTraceRoutes() abiManagementRegistrationResponse {
-	base := "privacygateway/" + traceDataPath
 	return abiManagementRegistrationResponse{
 		Routes: []abiManagementRoute{
-			{Method: "GET", Path: base, Description: "读取内存中的请求脱敏追踪快照"},
-			{Method: "DELETE", Path: base, Description: "清空内存中的追踪缓冲"},
+			{Method: "GET", Path: traceDataPath, Description: "读取内存中的请求脱敏追踪快照"},
+			{Method: "DELETE", Path: traceDataPath, Description: "清空内存中的追踪缓冲"},
 		},
 		Resources: []abiResourceRoute{{
 			Path:        traceResourcePath,
@@ -37,6 +37,8 @@ func managementTraceRoutes() abiManagementRegistrationResponse {
 }
 
 // handleABIManagementTrace 处理 management.handle 的 trace 数据/页面路由。
+// 数据只在完整路径等于 /v0/management/privacygateway/traces 时返回（R12.1）；
+// 资源通道 /v0/resource/... 与相对路径永远拿不到数据（R12.8）。
 func handleABIManagementTrace(ctx context.Context, request []byte) ([]byte, error) {
 	var req abiManagementHandleRequest
 	if errDecode := json.Unmarshal(request, &req); errDecode != nil {
@@ -52,15 +54,21 @@ func handleABIManagementTrace(ctx context.Context, request []byte) ([]byte, erro
 		}
 	}
 
-	normalized := normalizeManagementPath(req.Path)
 	switch {
-	case normalized == traceDataPath:
+	case dataRoutePath(req.Path) == strings.Trim(traceDataPath, "/"):
 		return handleTraceData(ctx, req)
-	case normalized == traceResourcePath:
+	case normalizeManagementPath(req.Path) == traceResourcePath:
 		return handleTracePage(req)
 	default:
 		return abiOKEnvelope(managementPlainTextResponse(http.StatusNotFound, "privacy gateway management resource not found"))
 	}
+}
+
+// dataRoutePath 归一化为数据路由判定路径：去 query、去首尾斜杠。
+// 不折叠 /v0/resource/ 前缀，保证资源通道永远不匹配数据路由。
+func dataRoutePath(path string) string {
+	trimmed, _, _ := strings.Cut(path, "?")
+	return strings.Trim(trimmed, "/")
 }
 
 // managementTraceAllowResponse 返回带显式 Allow 头的文本响应（数据路由支持 GET+DELETE）。
@@ -84,7 +92,8 @@ func handleTracePage(req abiManagementHandleRequest) ([]byte, error) {
 			"Content-Type":            []string{"text/html; charset=utf-8"},
 			"X-Content-Type-Options":  []string{"nosniff"},
 			"Cache-Control":           []string{"no-store"},
-			"Content-Security-Policy": []string{"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src *"},
+			"Referrer-Policy":         []string{"no-referrer"},
+			"Content-Security-Policy": []string{"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"},
 		},
 		Body: traceHTML,
 	})
@@ -106,13 +115,14 @@ func handleTraceData(ctx context.Context, req abiManagementHandleRequest) ([]byt
 }
 
 func handleTraceDataGet(req abiManagementHandleRequest) ([]byte, error) {
-	since, limit, filter := parseTraceQuery(req.Query)
 	abiState.RLock()
 	p := abiState.plugin
 	abiState.RUnlock()
 	if p == nil {
 		return abiOKEnvelope(traceJSONResponse(traceSnapshot{Enabled: false, Requests: []*traceRecord{}}))
 	}
+	maxRequests, _ := p.traces.stats()
+	since, limit, filter := parseTraceQuery(req.Query, maxRequests)
 	snap := p.traces.snapshot(since, limit, filter)
 	if !snap.Enabled {
 		snap.Requests = []*traceRecord{}
@@ -120,29 +130,47 @@ func handleTraceDataGet(req abiManagementHandleRequest) ([]byte, error) {
 	return abiOKEnvelope(traceJSONResponse(snap))
 }
 
+// handleTraceDataDelete 清空缓冲并返回 {"cleared":n}（R11.10）。
 func handleTraceDataDelete(ctx context.Context) ([]byte, error) {
 	abiState.RLock()
 	p := abiState.plugin
 	abiState.RUnlock()
 	if p == nil {
-		return abiOKEnvelope(traceJSONResponse(traceSnapshot{Enabled: false, Requests: []*traceRecord{}}))
+		return abiOKEnvelope(traceClearResponse(0))
 	}
 	cleared := p.traces.clear()
 	logHost(ctx, logLevelInfo, "privacy gateway trace buffer cleared", map[string]any{"cleared": cleared})
-	return abiOKEnvelope(traceJSONResponse(p.traces.snapshot(0, 0, "")))
+	return abiOKEnvelope(traceClearResponse(cleared))
 }
 
-// parseTraceQuery 解析 since / limit / filter 查询参数（需求 13.3–13.6）。
-// limit 默认 50，范围 1..maxTraceLimit；since/filter 非法时按 0/"" 处理。
-func parseTraceQuery(query url.Values) (since int64, limit int, filter string) {
+func traceClearResponse(cleared int) pluginapi.ManagementResponse {
+	body, _ := json.Marshal(map[string]int{"cleared": cleared})
+	return pluginapi.ManagementResponse{
+		StatusCode: http.StatusOK,
+		Headers: http.Header{
+			"Content-Type":           []string{"application/json; charset=utf-8"},
+			"Cache-Control":          []string{"no-store"},
+			"X-Content-Type-Options": []string{"nosniff"},
+		},
+		Body: body,
+	}
+}
+
+// parseTraceQuery 解析 since / limit / filter 查询参数（R11.3–R11.7）。
+// limit 默认 50，有效范围 1..trace_max_requests（maxRequests）；
+// since/filter 无法解析或超范围时按 0/"" 处理，不返回 400。
+func parseTraceQuery(query url.Values, maxRequests int) (since int64, limit int, filter string) {
 	limit = defaultTraceLimit
+	if maxRequests < 1 {
+		maxRequests = defaultTraceMaxReq
+	}
 	if v := query.Get("since"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
 			since = n
 		}
 	}
 	if v := query.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= maxTraceLimit {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= maxRequests {
 			limit = n
 		}
 	}
@@ -160,7 +188,7 @@ func traceJSONResponse(snap traceSnapshot) pluginapi.ManagementResponse {
 		"version": pluginVersion,
 		"plugin": map[string]any{
 			"version":       pluginVersion,
-			"enabled":       true,
+			"enabled":       snapPluginEnabled(),
 			"fail_closed":   gatewayFailClosed(),
 			"trace_enabled": snap.Enabled,
 		},
@@ -177,9 +205,24 @@ func traceJSONResponse(snap traceSnapshot) pluginapi.ManagementResponse {
 	body, _ := json.Marshal(payload)
 	return pluginapi.ManagementResponse{
 		StatusCode: http.StatusOK,
-		Headers:    http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
-		Body:       body,
+		Headers: http.Header{
+			"Content-Type":           []string{"application/json; charset=utf-8"},
+			"Cache-Control":          []string{"no-store"},
+			"X-Content-Type-Options": []string{"nosniff"},
+		},
+		Body: body,
 	}
+}
+
+// snapPluginEnabled 返回当前插件总开关（未注册时 false）。
+func snapPluginEnabled() bool {
+	abiState.RLock()
+	p := abiState.plugin
+	abiState.RUnlock()
+	if p == nil {
+		return false
+	}
+	return p.enabled()
 }
 
 func snapBufferedLimit() int {
@@ -204,15 +247,13 @@ func snapEventsLimit() int {
 	return maxEvents
 }
 
-// normalizeManagementPath 归一化 management 路径：去掉首尾斜杠，
-// 并把资源路由 /v0/resource/plugins/privacygateway/<name> 折叠为 <name>。
+// normalizeManagementPath 归一化 management 页面路径：先去 query，
+// 再去首尾斜杠，并把资源路由 /v0/resource/plugins/privacygateway/<name> 折叠为 <name>。
 func normalizeManagementPath(path string) string {
-	trimmed := strings.Trim(path, "/")
+	trimmed, _, _ := strings.Cut(path, "?")
+	trimmed = strings.Trim(trimmed, "/")
 	if strings.HasPrefix(trimmed, "v0/resource/plugins/privacygateway/") {
 		return strings.TrimPrefix(trimmed, "v0/resource/plugins/privacygateway/")
-	}
-	if i := strings.Index(trimmed, "?"); i >= 0 {
-		trimmed = trimmed[:i]
 	}
 	return trimmed
 }

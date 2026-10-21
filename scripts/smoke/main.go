@@ -317,7 +317,12 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 	var result struct {
 		Resources []struct {
 			Path string `json:"Path"`
+			Menu string `json:"Menu"`
 		} `json:"resources"`
+		Routes []struct {
+			Method string `json:"method"`
+			Path   string `json:"path"`
+		} `json:"routes"`
 	}
 	if err := json.Unmarshal(env.Result, &result); err != nil {
 		return fail("management.register", "result 解码失败: "+err.Error())
@@ -329,10 +334,32 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 	if len(result.Resources) != wantResources {
 		return fail("management.register", fmt.Sprintf("PANEL_ENABLED=%v 时 resources 应为 %d 项，实际 %d 项", panelEnabledSmoke(), wantResources, len(result.Resources)))
 	}
+	if panelEnabledSmoke() {
+		// R20.1：2 条管理路由（GET/DELETE，完整管理路径）与资源路由 trace。
+		if len(result.Routes) != 2 {
+			return fail("management.register", fmt.Sprintf("routes 应为 2 条，实际 %d：%s", len(result.Routes), string(env.Result)))
+		}
+		wantMethods := map[string]bool{"GET": false, "DELETE": false}
+		for _, r := range result.Routes {
+			if r.Path != "/v0/management/privacygateway/traces" {
+				return fail("management.register", fmt.Sprintf("route path = %q，期望完整管理路径", r.Path))
+			}
+			if _, ok := wantMethods[r.Method]; !ok {
+				return fail("management.register", fmt.Sprintf("route method = %q 不在 GET/DELETE", r.Method))
+			}
+			wantMethods[r.Method] = true
+		}
+		if !wantMethods["GET"] || !wantMethods["DELETE"] {
+			return fail("management.register", fmt.Sprintf("routes 方法不全：%v", wantMethods))
+		}
+		if result.Resources[0].Path != "trace" || result.Resources[0].Menu != "隐私脱敏日志" {
+			return fail("management.register", fmt.Sprintf("资源路由 = %+v，期望 Path=trace Menu=隐私脱敏日志", result.Resources[0]))
+		}
+	}
 	fmt.Println("smoke: management.register OK")
 
 	// 资源路由：trace 页面（panel.enabled=true 时 200/HTML，否则 404）。
-	handleResult, err := managementHandle(api, "GET", "trace")
+	handleResult, err := managementHandle(api, "GET", "/v0/resource/plugins/privacygateway/trace")
 	if err != nil {
 		return err
 	}
@@ -346,8 +373,17 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 	if panelEnabledSmoke() && !bytes.Contains(bytes.ToLower(handleResult.Body), []byte("<!doctype html")) {
 		return fail("management.handle", "panel.enabled=true 时 GET trace Body 应为 HTML 页面")
 	}
-	// 数据路由：GET traces 返回 JSON 快照，DELETE 清空缓冲。
-	dataResult, err := managementHandle(api, "GET", "traces")
+	// 资源通道取数据必须 404（R12.1 数据隔离）。
+	leak, errLeak := managementHandle(api, "GET", "/v0/resource/plugins/privacygateway/traces")
+	if errLeak != nil {
+		return errLeak
+	}
+	if leak.StatusCode != 404 {
+		return fail("management.handle", fmt.Sprintf("资源通道 GET traces StatusCode=%d，期望 404", leak.StatusCode))
+	}
+	// 数据路由：完整管理路径 GET 返回 JSON 快照（R20.3：含 redact.done 且不含原值），DELETE 清空缓冲。
+	dataPath := "/v0/management/privacygateway/traces"
+	dataResult, err := managementHandle(api, "GET", dataPath)
 	if err != nil {
 		return err
 	}
@@ -358,12 +394,21 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 		if !bytes.Contains(dataResult.Body, []byte(`"requests"`)) {
 			return fail("management.handle", "GET traces Body 应含 requests 字段: "+string(dataResult.Body))
 		}
-		delResult, errDel := managementHandle(api, "DELETE", "traces")
+		if !bytes.Contains(dataResult.Body, []byte("redact.done")) {
+			return fail("management.handle", "GET traces Body 应含 redact.done 事件: "+string(dataResult.Body))
+		}
+		if bytes.Contains(dataResult.Body, []byte("user@example.com")) {
+			return fail("management.handle", "GET traces Body 含原始邮箱（禁止回显原值）")
+		}
+		delResult, errDel := managementHandle(api, "DELETE", dataPath)
 		if errDel != nil {
 			return errDel
 		}
 		if delResult.StatusCode != 200 {
 			return fail("management.handle", fmt.Sprintf("DELETE traces StatusCode=%d，期望 200", delResult.StatusCode))
+		}
+		if !bytes.Contains(delResult.Body, []byte(`"cleared"`)) {
+			return fail("management.handle", "DELETE Body 应含 cleared 字段: "+string(delResult.Body))
 		}
 	} else if dataResult.StatusCode != 404 {
 		return fail("management.handle", fmt.Sprintf("PANEL_ENABLED=false 时 GET traces StatusCode=%d，期望 404", dataResult.StatusCode))

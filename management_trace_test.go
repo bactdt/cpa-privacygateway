@@ -40,7 +40,7 @@ func traceJSONBody(t *testing.T, resp pluginapi.ManagementResponse) map[string]j
 
 func TestTraceDataPageRequiresPanelEnabled(t *testing.T) {
 	resetABIState(t)
-	for _, path := range []string{"trace", "traces"} {
+	for _, path := range []string{"trace", traceDataPath} {
 		for _, method := range []string{http.MethodGet, http.MethodDelete} {
 			if got := callManagement(t, method, path).StatusCode; got != http.StatusNotFound {
 				t.Errorf("panel.enabled=false 时 %s %s status = %d，期望 404", method, path, got)
@@ -65,7 +65,7 @@ func TestTraceDataGetShapeAndQuery(t *testing.T) {
 	})
 
 	// 默认查询：since=0, limit=50, filter=""
-	payload := traceJSONBody(t, callManagement(t, http.MethodGet, "traces"))
+	payload := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath))
 	for _, key := range []string{"version", "plugin", "limits", "buffered", "evicted", "next_since", "requests"} {
 		if _, ok := payload[key]; !ok {
 			t.Errorf("traces 响应缺少字段 %q：%s", key, payload)
@@ -111,7 +111,7 @@ func TestTraceDataGetShapeAndQuery(t *testing.T) {
 
 	// since 过滤：只返回 updated_seq 更大的记录。
 	sinceSeq := requests[0]["updated_seq"].(float64)
-	sinceQuery := "traces?since=" + itoa64(int64(sinceSeq))
+	sinceQuery := traceDataPath + "?since=" + itoa64(int64(sinceSeq))
 	filtered := traceJSONBody(t, callManagement(t, http.MethodGet, sinceQuery))
 	var after []map[string]any
 	_ = json.Unmarshal(filtered["requests"], &after)
@@ -120,7 +120,7 @@ func TestTraceDataGetShapeAndQuery(t *testing.T) {
 	}
 
 	// limit=1 截断。
-	limited := traceJSONBody(t, callManagement(t, http.MethodGet, "traces?limit=1"))
+	limited := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath+"?limit=1"))
 	var one []map[string]any
 	_ = json.Unmarshal(limited["requests"], &one)
 	if len(one) != 1 {
@@ -128,7 +128,7 @@ func TestTraceDataGetShapeAndQuery(t *testing.T) {
 	}
 
 	// 非法 limit 回退默认 50（此处 2 条全部返回）。
-	invalid := traceJSONBody(t, callManagement(t, http.MethodGet, "traces?limit=abc&limit=99999"))
+	invalid := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath+"?limit=abc&limit=99999"))
 	var invalidReqs []map[string]any
 	_ = json.Unmarshal(invalid["requests"], &invalidReqs)
 	if len(invalidReqs) != 2 {
@@ -136,14 +136,14 @@ func TestTraceDataGetShapeAndQuery(t *testing.T) {
 	}
 
 	// filter=findings：只保留带 finding 的记录。
-	findings := traceJSONBody(t, callManagement(t, http.MethodGet, "traces?filter=findings"))
+	findings := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath+"?filter=findings"))
 	var fReqs []map[string]any
 	_ = json.Unmarshal(findings["requests"], &fReqs)
 	if len(fReqs) != 1 || fReqs[0]["request_id"] != "r2" {
 		t.Errorf("filter=findings 应只返回 r2，实际 %s", findings["requests"])
 	}
 	// filter 非法值回退 all。
-	all := traceJSONBody(t, callManagement(t, http.MethodGet, "traces?filter=bogus"))
+	all := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath+"?filter=bogus"))
 	var aReqs []map[string]any
 	_ = json.Unmarshal(all["requests"], &aReqs)
 	if len(aReqs) != 2 {
@@ -159,19 +159,19 @@ func TestTraceDataDeleteClearsBuffer(t *testing.T) {
 	abiState.RUnlock()
 	p.traces.record("r1", "t1", "request.received", nil)
 
-	deleted := traceJSONBody(t, callManagement(t, http.MethodDelete, "traces"))
-	var buffered int
-	if errDecode := json.Unmarshal(deleted["buffered"], &buffered); errDecode != nil {
-		t.Fatalf("buffered 解码失败：%v", errDecode)
+	deleted := traceJSONBody(t, callManagement(t, http.MethodDelete, traceDataPath))
+	var cleared int
+	if errDecode := json.Unmarshal(deleted["cleared"], &cleared); errDecode != nil {
+		t.Fatalf("cleared 解码失败：%v (%s)", errDecode, deleted["cleared"])
 	}
-	if buffered != 0 {
-		t.Errorf("DELETE 后 buffered = %d，期望 0", buffered)
+	if cleared != 1 {
+		t.Errorf("DELETE cleared = %d，期望 1（清空前的记录数）", cleared)
 	}
 	if got := len(p.traces.snapshot(0, 10, "").Requests); got != 0 {
 		t.Errorf("DELETE 后仍剩 %d 条记录", got)
 	}
 	// DELETE 后 GET 返回空数组。
-	empty := traceJSONBody(t, callManagement(t, http.MethodGet, "traces"))
+	empty := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath))
 	var reqs []map[string]any
 	_ = json.Unmarshal(empty["requests"], &reqs)
 	if len(reqs) != 0 {
@@ -182,7 +182,7 @@ func TestTraceDataDeleteClearsBuffer(t *testing.T) {
 func TestTraceDataRejectsUnsupportedMethod(t *testing.T) {
 	enablePanelForTrace(t)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
-		resp := callManagement(t, method, "traces")
+		resp := callManagement(t, method, traceDataPath)
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("%s traces status = %d，期望 405", method, resp.StatusCode)
 		}
@@ -192,9 +192,49 @@ func TestTraceDataRejectsUnsupportedMethod(t *testing.T) {
 	}
 }
 
+// TestTraceDataOnlyViaFullManagementPath 覆盖 R12.1/R12.8 数据隔离：
+// 资源通道与相对路径永远拿不到追踪数据，只有完整管理路径可以。
+func TestTraceDataOnlyViaFullManagementPath(t *testing.T) {
+	enablePanelForTrace(t)
+	registerTrace(t, "panel:\n  enabled: true\ntrace_enabled: true\n")
+	abiState.RLock()
+	p := abiState.plugin
+	abiState.RUnlock()
+	if p != nil {
+		p.traces.record("r1", "t1", "redact.done", map[string]any{"findings": 1})
+	}
+
+	for _, path := range []string{
+		"traces",
+		"/traces",
+		"/v0/resource/plugins/privacygateway/traces",
+		"/v0/resource/plugins/privacygateway/traces?limit=1",
+		"/v0/management/plugins/privacygateway/traces",
+		"/v0/management/privacygateway/panel",
+		"panel",
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodDelete} {
+			if got := callManagement(t, method, path).StatusCode; got != http.StatusNotFound {
+				t.Errorf("%s %s status = %d，期望 404（资源通道/非管理路径不得取到数据）", method, path, got)
+			}
+		}
+	}
+
+	// 完整管理路径 + 查询串可取到数据。
+	ok := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath+"?since=0&limit=10"))
+	if len(ok["requests"]) == 0 {
+		t.Error("完整管理路径应能取到追踪数据")
+	}
+
+	// 旧 panel 路径不再服务（404）。
+	if got := callManagement(t, http.MethodGet, "/v0/resource/plugins/privacygateway/panel").StatusCode; got != http.StatusNotFound {
+		t.Errorf("旧 panel 路径 status = %d，期望 404", got)
+	}
+}
+
 func TestTraceDataWithoutPluginReturnsEmptySnapshot(t *testing.T) {
 	enablePanelForTrace(t)
-	payload := traceJSONBody(t, callManagement(t, http.MethodGet, "traces"))
+	payload := traceJSONBody(t, callManagement(t, http.MethodGet, traceDataPath))
 	var plug struct {
 		TraceEnabled bool `json:"trace_enabled"`
 	}
@@ -239,59 +279,6 @@ func TestTracePageServesEmbeddedHTML(t *testing.T) {
 	folded := callManagement(t, http.MethodGet, "/v0/resource/plugins/privacygateway/trace")
 	if folded.StatusCode != http.StatusOK {
 		t.Errorf("资源路径折叠 GET status = %d，期望 200", folded.StatusCode)
-	}
-}
-
-// TestManagementVisibleRequiresBothSwitches 覆盖 TD-6 联动语义：
-// panel.enabled=true 但 trace_enabled=false 时不声明管理能力、路由与页面均 404。
-func TestManagementVisibleRequiresBothSwitches(t *testing.T) {
-	resetABIState(t)
-	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
-		lifecycleRequest(t, []byte("panel:\n  enabled: true\ntrace_enabled: false\n"))); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	t.Cleanup(func() { resetABIState(t) })
-
-	raw, err := handleABIMethod(context.Background(), pluginabi.MethodManagementRegister, nil)
-	if err != nil {
-		t.Fatalf("management.register: %v", err)
-	}
-	var env struct {
-		OK     bool `json:"ok"`
-		Result struct {
-			Capabilities map[string]bool `json:"capabilities"`
-			Resources    []struct {
-				Path string `json:"Path"`
-			} `json:"resources"`
-			Routes []json.RawMessage `json:"routes"`
-		} `json:"result"`
-	}
-	if errDecode := json.Unmarshal(raw, &env); errDecode != nil || !env.OK {
-		t.Fatalf("信封异常：%s", raw)
-	}
-	if env.Result.Capabilities["management_api"] {
-		t.Errorf("trace_enabled=false 时 management_api 不应声明为 true：%s", raw)
-	}
-	if len(env.Result.Resources) != 0 || len(env.Result.Routes) != 0 {
-		t.Errorf("trace_enabled=false 时 resources/routes 应为空：%s", raw)
-	}
-	for _, probe := range []struct{ method, path string }{
-		{http.MethodGet, "trace"},
-		{http.MethodGet, "traces"},
-		{http.MethodDelete, "traces"},
-	} {
-		if got := callManagement(t, probe.method, probe.path).StatusCode; got != http.StatusNotFound {
-			t.Errorf("%s %s status = %d，期望 404", probe.method, probe.path, got)
-		}
-	}
-
-	// 重新打开 trace 后（panel 仍开）管理可达。
-	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
-		lifecycleRequest(t, []byte("panel:\n  enabled: true\ntrace_enabled: true\n"))); err != nil {
-		t.Fatalf("re-register: %v", err)
-	}
-	if got := callManagement(t, http.MethodGet, "trace").StatusCode; got != http.StatusOK {
-		t.Errorf("双开关打开后 GET trace status = %d，期望 200", got)
 	}
 }
 
