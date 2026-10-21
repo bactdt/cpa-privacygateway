@@ -44,8 +44,8 @@
 | 复杂度 | walkValue、Detect 热点按已有处置保留 | 不把历史行数下降当作当前自动度量结果 |
 | 技术债 | 51 项：41 fixed、3 declined、7 open（020/022 均已 benchmark 并登记保留决策；046–050 为流式还原已知限制；051 面板开关配置化已修复） | P0 全部清零（043 max_findings 超限 fail-closed 闭合）；044 ABI 层 panic/不可用 fail-closed 终止信封闭合；018 白名单重建、017 语义终版 |
 | 隐私闭环 | 本轮同 ID 映射/格式、after-auth 准入、热重载交错已有 Go 层回归证据；超时回收仍可能丢映射 | 新版本真实宿主联调另行验证，不据此宣称零漏报/零并发缺陷 |
-| 可观测性（RT-1 追踪） | 仅内存环形缓冲 + 掩码预览事件流；`GET/DELETE /v0/management/privacygateway/traces` 与 `trace` 页面（trace.html，Bearer+增量轮询）；单元/契约测试与 `make smoke`（数据路由、原值不回显、cleared）通过 | 真实 CPA 宿主验收 trace 页（菜单「隐私脱敏日志」、200 页面、GET 含 `redact.done`）；RT-2 宿主日志关联与 RT-3 流式详情另立计划 |
-| 端到端 | 已有交付物 C 加载冒烟（`make smoke`：dlopen→init→register→脱敏→管理接口（可见性关闭返回 404/空 routes/resources；双开关开启时 routes 含完整 traces 路径）→shutdown，对 zip 根目录解压后的 .so 通过；`make smoke-panel` 按双开关开启路径验证页面 200/HTML、数据 GET 含 `redact.done` 且不含原值、DELETE 返回 `cleared`） | 用户真实 CPA 宿主已验收脱敏、流式与非流式还原（2026-10-11，用户执行）；trace 日志页已实现（2026-10-21），待真实宿主验收 |
+| 可观测性（RT-1 追踪） | 仅内存环形缓冲 + 掩码预览事件流；`GET/DELETE /v0/management/privacygateway/traces` 与 `trace` 页面（trace.html，Bearer+增量轮询）；单元/契约测试与 `make smoke` 通过；**本机真实 CPA 宿主验收通过（2026-10-21）**：页面/鉴权/GET 掩码/DELETE cleared/资源通道 404/线格式解码 | RT-2 宿主日志关联与 RT-3 流式详情另立计划 |
+| 端到端 | 已有交付物 C 加载冒烟（`make smoke`：dlopen→init→register→脱敏→管理接口（可见性关闭返回 404/空 routes/resources；双开关开启时 routes 含完整 traces 路径）→shutdown，对 zip 根目录解压后的 .so 通过；`make smoke-panel` 按双开关开启路径验证页面 200/HTML、数据 GET 含 `redact.done` 且不含原值、DELETE 返回 `cleared`） | 用户真实 CPA 宿主已验收脱敏、流式与非流式还原（2026-10-11，用户执行）；trace 日志页已实现并于 2026-10-21 通过本机真实 CPA 宿主验收（dlopen 加载、页面 200、数据鉴权与掩码核验） |
 
 ## 4. 复算方式
 

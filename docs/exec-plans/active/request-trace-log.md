@@ -1,6 +1,6 @@
 # 请求脱敏追踪日志计划
 
-> 日期：2026-10-11。状态：**实现完成，待真实宿主验收**（2026-10-21；`.kiro/specs/request-trace-log/` 规格 + 源码 + 测试 + 交付物冒烟全部完成；tasks.md 未生成（直接按阶段提交推进））。
+> 日期：2026-10-11。状态：**实现完成，本机真实宿主验收通过**（2026-10-21；`.kiro/specs/request-trace-log/` 规格 + 源码 + 测试 + 交付物冒烟全部完成；同日用真实 CPA 宿主 dlopen 加载完成 Requirement 22 等价验收；tasks.md 未生成（直接按阶段提交推进））。
 
 ## 1. 已确认决策（用户，2026-10-11）
 
@@ -49,4 +49,4 @@
 | tasks.md | 未生成（以 `docs/exec-plans/active/request-trace-log.md` 分阶段提交代替） |
 | 实现与测试 | 已完成（2026-10-21）：阶段 1 掩码/观测/计数（`redact/finding.go`、`restore_stats.go`）、阶段 2 缓冲与阶段 hook（`trace.go`、`trace_hooks.go` + 拦接线）、阶段 3 生命周期与配置（`config.go`、`abi.go`）、阶段 4 管理路由与页面（`management_trace.go`）、阶段 5 打包/冒烟/配置样例、阶段 6 文档同步 |
 | 交付物冒烟 | 已完成（`make smoke` 与 `make smoke-panel`：路由注册、资源通道取数据 404、完整管理路径 GET 含 `redact.done` 且不含原值、DELETE `cleared`） |
-| 真实宿主验收 | 未开始（需用户执行：Requirement 22） |
+| 真实宿主验收 | **通过（2026-10-21，本机真实 CPA 宿主）**：dlopen 加载 v0.1.4 → trace 页 200（CSP/referrer/nosniff 齐）→ 旧 panel 资源 404 → 数据路由无钥/错钥 401、正确钥 200 → GET 含 before/after_auth + redact.done + stream.summary + response.restored + request.complete，4 个样本原值全部掩码 → DELETE `{"cleared":2}` → 资源通道取数据 404 → limits 200/64/64；线格式修复（`Method`/`Path` 默认键）经真实宿主解码验证 |
