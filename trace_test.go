@@ -232,9 +232,15 @@ func TestTraceClear(t *testing.T) {
 
 // 需求 7.5：关闭态 traceLogger 全部 no-op。
 func TestTraceLoggerDisabledNoOp(t *testing.T) {
-	p := newPlugin(defaultConfig())
+	cfg := defaultConfig()
+	traceOff := false
+	cfg.TraceEnabled = &traceOff
+	p := newPlugin(cfg)
 	if p.traces == nil {
 		t.Fatal("plugin 应持有 traceBuffer")
+	}
+	if p.traces.traceOn() {
+		t.Fatal("trace_enabled=false 时缓冲应关闭")
 	}
 	tl := p.trace("r1", "t1")
 	if tl.on() {

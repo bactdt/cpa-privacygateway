@@ -46,10 +46,15 @@ type config struct {
 	CustomRules         []string       `yaml:"custom_rules"`
 	Detectors           detectorConfig `yaml:"detectors"`
 	Panel               panelConfig    `yaml:"panel"`
+	// RT-1 追踪（TD-5：开箱可见）。默认 true/200/64。
+	TraceEnabled     *bool `yaml:"trace_enabled"`
+	TraceMaxRequests int   `yaml:"trace_max_requests"`
+	TraceMaxEvents   int   `yaml:"trace_max_events"`
 }
 
 func defaultConfig() config {
 	closed := true
+	traceOn := true
 	return config{
 		Enabled:           true,
 		FailClosed:        &closed,
@@ -58,6 +63,9 @@ func defaultConfig() config {
 		MaxBodyBytes:      1 << 20,
 		MaxMappings:       1024,
 		MaxMappingBytes:   1 << 20,
+		TraceEnabled:      &traceOn,
+		TraceMaxRequests:  200,
+		TraceMaxEvents:    64,
 	}
 }
 
@@ -92,6 +100,12 @@ func parseConfig(raw []byte) (config, error) {
 	if cfg.Detectors.MinEntropy < 0 {
 		return config{}, fmt.Errorf("detectors.min_entropy must not be negative")
 	}
+	if cfg.TraceMaxRequests < 1 || cfg.TraceMaxRequests > 2000 {
+		return config{}, fmt.Errorf("trace_max_requests must be between 1 and 2000")
+	}
+	if cfg.TraceMaxEvents < 8 || cfg.TraceMaxEvents > 256 {
+		return config{}, fmt.Errorf("trace_max_events must be between 8 and 256")
+	}
 	for i, pattern := range cfg.CustomRules {
 		if _, err := regexp.Compile(pattern); err != nil {
 			return config{}, fmt.Errorf("custom_rules[%d] is invalid: %v", i, err)
@@ -105,6 +119,29 @@ func (c config) failClosed() bool {
 		return true
 	}
 	return *c.FailClosed
+}
+
+// traceOn 读取追踪开关；nil 视为 true（TD-5：开箱可见）。
+func (c config) traceOn() bool {
+	return c.TraceEnabled == nil || *c.TraceEnabled
+}
+
+// traceLimits 返回经范围钳制后的缓冲容量。
+func (c config) traceLimits() (maxRequests, maxEvents int) {
+	maxRequests, maxEvents = c.TraceMaxRequests, c.TraceMaxEvents
+	if maxRequests < 1 {
+		maxRequests = 200
+	}
+	if maxRequests > 2000 {
+		maxRequests = 2000
+	}
+	if maxEvents < 8 {
+		maxEvents = 64
+	}
+	if maxEvents > 256 {
+		maxEvents = 256
+	}
+	return maxRequests, maxEvents
 }
 
 func (c config) ttl() time.Duration {

@@ -48,7 +48,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sync"
 	"unsafe"
 
@@ -220,6 +219,10 @@ func PrivacyGatewayPluginShutdown() {
 		close(abiState.stopJanitor)
 		abiState.stopJanitor = nil
 	}
+	// 关停即清空追踪缓冲，避免残留敏感占位符映射与陈旧事件。
+	if abiState.plugin != nil && abiState.plugin.traces != nil {
+		abiState.plugin.traces.configure(false, 0, 0)
+	}
 	abiState.plugin = nil
 	abiState.host = nil
 	resetPanelEnabledLocked()
@@ -243,21 +246,24 @@ func handleABIMethod(ctx context.Context, method string, request []byte) (raw []
 				"method": method,
 				"panic":  fmt.Sprintf("%v", recovered),
 			})
+			// RT-1：只记 panic，不回显 panic 文本（需求 5）。
+			recordABIFailure(abiStateTraces(), method, string(request), "panic")
 			raw, err = unavailableEnvelope(ctx, fmt.Errorf("panic: %v", recovered))
 		}
 	}()
 
 	p, done, errPlugin := beginPluginCall()
 	if errPlugin != nil {
+		recordABIFailure(abiStateTraces(), method, string(request), "unavailable")
 		return unavailableEnvelope(ctx, errPlugin)
 	}
 	defer done()
 
 	switch method {
 	case pluginabi.MethodRequestInterceptBefore:
-		return handleRequestIntercept(ctx, request, p.InterceptRequestBeforeAuth)
+		return handleRequestIntercept(ctx, method, request, p.InterceptRequestBeforeAuth)
 	case pluginabi.MethodRequestInterceptAfter:
-		return handleRequestIntercept(ctx, request, p.InterceptRequestAfterAuth)
+		return handleRequestIntercept(ctx, method, request, p.InterceptRequestAfterAuth)
 	case pluginabi.MethodRequestComplete:
 		var completion pluginapi.RequestCompletion
 		if errDecode := json.Unmarshal(request, &completion); errDecode != nil {
@@ -272,6 +278,7 @@ func handleABIMethod(ctx context.Context, method string, request []byte) (raw []
 		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
 			// 响应侧无终止协议：解码失败时按空结果直通，由流恢复器尾块兜底。
 			logHost(ctx, logLevelWarn, "privacy gateway could not decode response payload", map[string]any{"cause": errDecode.Error()})
+			recordABIFailure(p.traces, method, string(request), "decode_failed")
 			return abiOKEnvelope(pluginapi.ResponseInterceptResponse{})
 		}
 		resp, errCall := p.InterceptResponse(withHostCallbackID(ctx, req.HostCallbackID), req.ResponseInterceptRequest)
@@ -280,6 +287,7 @@ func handleABIMethod(ctx context.Context, method string, request []byte) (raw []
 		var req abiStreamChunkInterceptRequest
 		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
 			logHost(ctx, logLevelWarn, "privacy gateway could not decode stream chunk payload", map[string]any{"cause": errDecode.Error()})
+			recordABIFailure(p.traces, method, string(request), "decode_failed")
 			return abiOKEnvelope(pluginapi.StreamChunkInterceptResponse{})
 		}
 		resp, errCall := p.InterceptStreamChunk(withHostCallbackID(ctx, req.HostCallbackID), req.StreamChunkInterceptRequest)
@@ -289,9 +297,10 @@ func handleABIMethod(ctx context.Context, method string, request []byte) (raw []
 	}
 }
 
-func handleRequestIntercept(ctx context.Context, request []byte, intercept func(context.Context, pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error)) ([]byte, error) {
+func handleRequestIntercept(ctx context.Context, method string, request []byte, intercept func(context.Context, pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error)) ([]byte, error) {
 	var req abiRequestInterceptRequest
 	if errDecode := json.Unmarshal(request, &req); errDecode != nil {
+		recordABIFailure(abiStateTraces(), method, string(request), "decode_failed")
 		return decodeFailureEnvelope(ctx, errDecode)
 	}
 	resp, errCall := intercept(withHostCallbackID(ctx, req.HostCallbackID), req.RequestInterceptRequest)
@@ -318,6 +327,10 @@ func handleABIRegister(ctx context.Context, method string, request []byte) ([]by
 	p := newPlugin(cfg)
 	if previous != nil {
 		p.states.takeOverFrom(previous.states)
+		// 追踪缓冲跨重配保留；configure 按新容量缩容或按新开关清空（需求 7.3/7.4）。
+		p.traces = previous.traces
+		maxRequests, maxEvents := cfg.traceLimits()
+		p.traces.configure(cfg.traceOn(), maxRequests, maxEvents)
 	}
 	if abiState.stopJanitor != nil {
 		close(abiState.stopJanitor)
@@ -353,6 +366,17 @@ func registrationEnvelope(panelEnabled bool) ([]byte, error) {
 		Metadata:      pluginMetadata(),
 		Capabilities:  abiCapabilities{RequestInterceptor: true, RequestLifecyclePlugin: true, ResponseInterceptor: true, StreamChunkInterceptor: true, ManagementAPI: panelEnabled},
 	})
+}
+
+// abiStateTraces 返回当前活跃插件的追踪缓冲（可能为 nil，供记录路径安全使用）。
+func abiStateTraces() *traceBuffer {
+	abiState.RLock()
+	p := abiState.plugin
+	abiState.RUnlock()
+	if p == nil {
+		return nil
+	}
+	return p.traces
 }
 
 func beginPluginCall() (*plugin, func(), error) {
@@ -394,96 +418,6 @@ func logHost(ctx context.Context, level, message string, fields map[string]any) 
 	}
 	_ = status
 }
-
-// gatewayFailClosed 报告插件当前是否按 fail_closed 处理不可用/解码失败：
-// 已注册实例读其配置；实例不可用时沿用最近一次注册配置的取值，
-// 从未注册过时按 fail_closed 处理——隐私网关缺失时的最安全行为是
-// 终止请求而非放行原文（TD-CPA-044）。
-func gatewayFailClosed() bool {
-	abiState.RLock()
-	p := abiState.plugin
-	last := abiState.lastFailClosed
-	had := abiState.hadConfig
-	abiState.RUnlock()
-	if p != nil {
-		cfg, _ := p.settings()
-		return cfg.failClosed()
-	}
-	if had {
-		return last
-	}
-	return true
-}
-
-// unavailableEnvelope 处理请求链路方法不可用（未注册/shutdown/panic）：
-// fail_closed 返回 OK 信封内的 500 server_error 终止响应，fail_open 返回空直通信封。
-// 宿主 v8.0.22 对 RPC error 放行（abi-contract §8 事实 5），因此不可用必须落在
-// 信封结果里而非信封错误上（TD-CPA-044）。
-func unavailableEnvelope(ctx context.Context, cause error) ([]byte, error) {
-	if !gatewayFailClosed() {
-		logHost(ctx, logLevelWarn, "privacy gateway unavailable, passing request through", map[string]any{
-			"cause": errCauseString(cause),
-		})
-		return abiOKEnvelope(pluginapi.RequestInterceptResponse{})
-	}
-	return abiOKEnvelope(terminateUnavailableResponse(http.StatusInternalServerError, "server_error", "privacy gateway is unavailable"))
-}
-
-// decodeFailureEnvelope 处理请求解码失败：fail_closed 400 终止，fail_open 空直通。
-func decodeFailureEnvelope(ctx context.Context, cause error) ([]byte, error) {
-	if !gatewayFailClosed() {
-		logHost(ctx, logLevelWarn, "privacy gateway could not decode request, passing through", map[string]any{
-			"cause": errCauseString(cause),
-		})
-		return abiOKEnvelope(pluginapi.RequestInterceptResponse{})
-	}
-	return abiOKEnvelope(terminateUnavailableResponse(http.StatusBadRequest, "invalid_request_error", "request could not be decoded by privacy gateway"))
-}
-
-func terminateUnavailableResponse(status int, errorType, message string) pluginapi.RequestInterceptResponse {
-	body, _ := json.Marshal(map[string]any{
-		"error": map[string]any{
-			"type":    errorType,
-			"message": message,
-		},
-	})
-	return pluginapi.RequestInterceptResponse{
-		Terminate:  true,
-		StatusCode: status,
-		ResponseHeaders: http.Header{
-			"Content-Type": []string{"application/json"},
-		},
-		ResponseBody: body,
-	}
-}
-
-func errCauseString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
-func abiOKEnvelopeWithError(v any, err error) ([]byte, error) {
-	if err != nil {
-		return nil, err
-	}
-	return abiOKEnvelope(v)
-}
-
-func abiOKEnvelope(v any) ([]byte, error) {
-	raw, errMarshal := json.Marshal(v)
-	if errMarshal != nil {
-		return nil, errMarshal
-	}
-	return json.Marshal(abiEnvelope{OK: true, Result: raw})
-}
-
-func abiErrorEnvelope(code, message string) []byte {
-	raw, _ := json.Marshal(abiEnvelope{OK: false, Error: &abiError{Code: code, Message: message}})
-	return raw
-}
-
 func writeABIResponse(response *C.cliproxy_buffer, raw []byte) {
 	if response == nil || len(raw) == 0 {
 		return

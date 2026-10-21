@@ -35,12 +35,15 @@ type plugin struct {
 }
 
 func newPlugin(cfg config) *plugin {
-	return &plugin{
+	p := &plugin{
 		cfg:      cfg,
 		detector: cfg.redactConfig(),
 		states:   newStateTable(cfg.MaxConcurrency, cfg.MaxRequests, cfg.ttl()),
 		traces:   newTraceBuffer(),
 	}
+	maxRequests, maxEvents := cfg.traceLimits()
+	p.traces.configure(cfg.traceOn(), maxRequests, maxEvents)
+	return p
 }
 
 // enabled 读取插件总开关；与 reconfigure 并发安全。
@@ -56,6 +59,8 @@ func (p *plugin) reconfigure(cfg config) {
 	p.cfg = cfg
 	p.detector = cfg.redactConfig()
 	p.states.setLimits(cfg.MaxConcurrency, cfg.MaxRequests, cfg.ttl())
+	maxRequests, maxEvents := cfg.traceLimits()
+	p.traces.configure(cfg.traceOn(), maxRequests, maxEvents)
 }
 
 func (p *plugin) settings() (config, redact.Config) {
