@@ -31,6 +31,7 @@ type plugin struct {
 	cfg      config
 	detector redact.Config
 	states   *stateTable
+	traces   *traceBuffer // RT-1 请求脱敏追踪环形缓冲；开关由 reconfigure 应用
 }
 
 func newPlugin(cfg config) *plugin {
@@ -38,6 +39,7 @@ func newPlugin(cfg config) *plugin {
 		cfg:      cfg,
 		detector: cfg.redactConfig(),
 		states:   newStateTable(cfg.MaxConcurrency, cfg.MaxRequests, cfg.ttl()),
+		traces:   newTraceBuffer(),
 	}
 }
 
