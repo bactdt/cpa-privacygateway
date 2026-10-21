@@ -320,8 +320,8 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 			Menu string `json:"Menu"`
 		} `json:"resources"`
 		Routes []struct {
-			Method string `json:"method"`
-			Path   string `json:"path"`
+			Method string
+			Path   string
 		} `json:"routes"`
 	}
 	if err := json.Unmarshal(env.Result, &result); err != nil {

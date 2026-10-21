@@ -23,7 +23,7 @@ func panelEnabled() bool {
 }
 
 // managementVisible 报告管理资源是否可达：panel.enabled 且 trace_enabled
-// （TD-6 联动语义）。任一关闭则注册声明空 resources，页面与数据路由返回 404。
+// （TD-11 联动语义）。任一关闭则注册声明空 resources，页面与数据路由返回 404。
 func managementVisible() bool {
 	abiState.RLock()
 	defer abiState.RUnlock()
@@ -36,11 +36,13 @@ type abiResourceRoute struct {
 	Description string
 }
 
+// abiManagementRoute 是管理路由的线格式元素：宿主侧
+// pluginapi.ManagementRoute 无 JSON tag，故本侧也必须用 Go 默认键名
+// （Method/Path/Description），Menu 与 Handler 字段不编码（R10.2）。
 type abiManagementRoute struct {
-	Method      string `json:"method"`
-	Path        string `json:"path"`
-	Menu        string `json:"menu,omitempty"`
-	Description string `json:"description,omitempty"`
+	Method      string
+	Path        string
+	Description string
 }
 
 type abiManagementRegistrationResponse struct {

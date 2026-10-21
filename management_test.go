@@ -113,23 +113,24 @@ func TestManagementEnabledByConfig(t *testing.T) {
 		t.Fatalf("管理路由应为 2 条：%s", raw)
 	}
 	for _, route := range env.Result.Routes {
-		if _, hasMenu := route["Menu"]; hasMenu {
-			t.Errorf("管理路由不应编码 Menu 字段：%s", route)
-		}
-		if _, hasHandler := route["Handler"]; hasHandler {
-			t.Errorf("管理路由不应编码 Handler 字段：%s", route)
+		// R10.2：宿主按 Go 默认键名（Method/Path/Description）解码，
+		// Menu 与 Handler 字段必须不出现。
+		for _, forbidden := range []string{"Menu", "Handler", "method", "path"} {
+			if _, has := route[forbidden]; has {
+				t.Errorf("管理路由不应编码 %s 字段：%s", forbidden, route)
+			}
 		}
 		var gotPath string
-		_ = json.Unmarshal(route["path"], &gotPath)
+		_ = json.Unmarshal(route["Path"], &gotPath)
 		if gotPath != "/v0/management/privacygateway/traces" {
-			t.Errorf("管理路由 path = %q，期望完整管理路径", gotPath)
+			t.Errorf("管理路由 Path = %q，期望完整管理路径", gotPath)
 		}
 	}
 	for _, wantMethod := range []string{"GET", "DELETE"} {
 		found := false
 		for _, route := range env.Result.Routes {
 			var gotMethod string
-			_ = json.Unmarshal(route["method"], &gotMethod)
+			_ = json.Unmarshal(route["Method"], &gotMethod)
 			if gotMethod == wantMethod {
 				found = true
 			}
