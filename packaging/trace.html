@@ -22,7 +22,7 @@ details.rec summary { cursor: pointer; font-size: .85rem; display: flex; flex-wr
 .bad { color: #c0392b; } .warn { color: #b9770e; } .ok { color: #1e8449; } .info { opacity: .7; }
 .events { margin: .4rem 0 .2rem 1rem; padding-left: .8rem; font-size: .82rem; font-family: ui-monospace, monospace; }
 .events li { margin: .1rem 0; white-space: pre-wrap; word-break: break-all; }
-.attempt { font-weight: 600; margin: .3rem 0 .1rem; }
+.attempt { font-weight: 600; margin: .4rem 0 .1rem; list-style: none; }
 .empty { opacity: .7; padding: 1.5rem 0; text-align: center; }
 .badge { font-size: .75rem; border: 1px solid rgba(127,127,127,.5); border-radius: 3px; padding: 0 .3rem; }
 code { font-family: ui-monospace, monospace; }
@@ -41,6 +41,7 @@ code { font-family: ui-monospace, monospace; }
     <option value="findings">有检出</option>
     <option value="errors">终止/失败/错误</option>
   </select>
+  <button id="pause" type="button">暂停刷新</button>
   <button id="clear" type="button">清空日志</button>
 </div>
 <div id="status" role="status" aria-live="polite">请输入 CPA 管理密钥</div>
@@ -60,6 +61,7 @@ const state = {
   key: "", connected: false, stopped: false,
   since: 0, filter: "all",
   records: new Map(), order: [],
+  nodes: new Map(), openIds: new Set(), paused: false,
   limits: { max_requests: 200 },
   inflight: null, timer: null, timeoutId: null, timedOut: false
 };
@@ -126,37 +128,45 @@ function receivedInfo(rec) {
   }
   return { fmt: "", stream: "", model: "", bodyBytes: null };
 }
-function attemptGroups(events) {
-  const flat = [];
-  const groups = [];
-  let cur = null;
+function attemptStats(events) {
+  // 预扫描每次凭据尝试自身的事件（request.received(attempt=n) 之后、
+  // 下一条 request.received 之前的 redact.done），汇总新增/复用项数。
+  const stats = new Map();
+  let cur = 0;
   for (const ev of (events || [])) {
-    if (ev.stage === "request.received" && ev.fields && Number(ev.fields.attempt) > 0) {
-      cur = { attempt: Number(ev.fields.attempt), events: [], added: 0, reused: 0 };
-      groups.push(cur);
-    } else if (ev.stage === "request.received") {
-      cur = null;
-      flat.push(ev);
+    const attempt = ev.stage === "request.received" && ev.fields ? Number(ev.fields.attempt) || 0 : 0;
+    if (ev.stage === "request.received") {
+      cur = attempt;
+      if (cur && !stats.has(cur)) stats.set(cur, { added: 0, reused: 0 });
       continue;
     }
-    if (cur) {
-      cur.events.push(ev);
-      if (ev.stage === "redact.done" && ev.fields) {
-        const findings = Number(ev.fields.findings) || 0;
-        const unique = Number(ev.fields.unique) || 0;
-        cur.added += unique;
-        cur.reused += findings - unique;
-      }
-    } else {
-      flat.push(ev);
+    if (!cur) continue;
+    if (ev.stage === "redact.done" && ev.fields) {
+      const s = stats.get(cur);
+      if (!s) continue;
+      const findings = Number(ev.fields.findings) || 0;
+      const unique = Number(ev.fields.unique) || 0;
+      s.added += unique;
+      s.reused += findings - unique;
     }
   }
-  return { flat: flat, groups: groups };
+  return stats;
 }
 function appendEventList(parent, events, t0) {
   const ol = document.createElement("ol");
   ol.className = "events";
+  const stats = attemptStats(events);
   for (const ev of events) {
+    const attempt = ev.stage === "request.received" && ev.fields ? Number(ev.fields.attempt) || 0 : 0;
+    if (attempt) {
+      const h = document.createElement("li");
+      h.className = "attempt";
+      const st = stats.get(attempt) || { added: 0, reused: 0 };
+      h.textContent = st.added + st.reused === 0
+        ? "第 " + attempt + " 次凭据尝试：无新增检出（沿用已有映射）"
+        : "第 " + attempt + " 次凭据尝试：新增 " + st.added + " 项、复用 " + st.reused + " 项";
+      ol.appendChild(h);
+    }
     const li = document.createElement("li");
     const off = t0 != null && ev.at ? (new Date(ev.at).getTime() - t0) : null;
     const head = (off != null ? "+" + off + "ms " : "") + ev.stage + " ";
@@ -233,17 +243,15 @@ function appendRecord(rec) {
 
   const events = rec.events || [];
   const t0 = events.length ? new Date(events[0].at).getTime() : new Date(rec.first_seen).getTime();
-  const split = attemptGroups(events);
-  appendEventList(det, split.flat, t0);
-  for (const g of split.groups) {
-    const h = document.createElement("div");
-    h.className = "attempt";
-    h.textContent = "第 " + g.attempt + " 次凭据尝试：新增 " + g.added + " 项、复用 " + g.reused + " 项";
-    det.appendChild(h);
-    appendEventList(det, g.events, t0);
-  }
+  appendEventList(det, events, t0);
 
-  el("list").appendChild(det);
+  det.setAttribute("data-id", rec.request_id);
+  det.open = state.openIds.has(rec.request_id);
+  det.addEventListener("toggle", function () {
+    if (det.open) state.openIds.add(rec.request_id);
+    else state.openIds.delete(rec.request_id);
+  });
+  return det;
 }
 
 function renderSummary(snap) {
@@ -261,13 +269,48 @@ function renderSummary(snap) {
   box.textContent = parts.join(" · ");
 }
 
+function captureAnchor(list) {
+  const first = list.firstElementChild;
+  if (!first) return null;
+  return { node: first, top: first.getBoundingClientRect().top };
+}
+function restoreAnchor(a) {
+  if (!a || !a.node || !a.node.isConnected) return;
+  const delta = a.node.getBoundingClientRect().top - a.top;
+  if (Math.abs(delta) > 1) window.scrollBy(0, delta);
+}
+
+// render 只重建 updated_seq 变化的记录：未变的 DOM 节点原地保留，
+// 已展开的 details 与滚动位置都不会被刷新破坏。
 function render() {
   const list = el("list");
-  list.textContent = "";
   const ids = state.order;
-  for (const id of ids) appendRecord(state.records.get(id));
-  const emptyBox = el("empty");
-  emptyBox.hidden = ids.length !== 0;
+  const anchor = captureAnchor(list);
+  const keep = new Set(ids);
+  for (const id of Array.from(state.nodes.keys())) {
+    if (keep.has(id)) continue;
+    const entry = state.nodes.get(id);
+    if (entry.node.parentNode) entry.node.parentNode.removeChild(entry.node);
+    state.nodes.delete(id);
+    state.openIds.delete(id);
+  }
+  for (let i = 0; i < ids.length; i++) {
+    const rec = state.records.get(ids[i]);
+    if (!rec) continue;
+    const entry = state.nodes.get(ids[i]);
+    let node;
+    if (entry && entry.seq === rec.updated_seq) {
+      node = entry.node;
+    } else {
+      node = appendRecord(rec);
+      if (entry && entry.node.parentNode) entry.node.parentNode.replaceChild(node, entry.node);
+      state.nodes.set(ids[i], { seq: rec.updated_seq, node: node });
+    }
+    const at = list.children[i] || null;
+    if (at !== node) list.insertBefore(node, at);
+  }
+  el("empty").hidden = ids.length !== 0;
+  restoreAnchor(anchor);
 }
 
 function mergeRequests(snap) {
@@ -290,7 +333,7 @@ function mergeRequests(snap) {
 }
 
 function renderStatus(snap) {
-  if (!state.connected) return;
+  if (!state.connected || state.paused) return;
   const p = snap.plugin || {};
   if (p.trace_enabled === false) {
     setText("status", "追踪已关闭：在配置中设置 trace_enabled: true");
@@ -390,7 +433,7 @@ function clearBuffer() {
 function startPolling() {
   if (state.timer) return;
   state.timer = setInterval(function () {
-    if (state.stopped || document.hidden || state.inflight) return;
+    if (state.stopped || state.paused || document.hidden || state.inflight) return;
     load();
   }, POLL_MS);
 }
@@ -435,6 +478,17 @@ el("filter").addEventListener("change", function () {
     stopPolling();
     load();
     startPolling();
+  }
+});
+el("pause").addEventListener("click", function () {
+  state.paused = !state.paused;
+  el("pause").textContent = state.paused ? "继续刷新" : "暂停刷新";
+  if (!state.connected) return;
+  if (state.paused) {
+    setText("status", "已暂停刷新（点「继续刷新」恢复）");
+  } else {
+    setText("status", "已连接 · 每 " + (POLL_MS / 1000) + " 秒刷新（增量 since=" + state.since + "）");
+    load();
   }
 });
 el("clear").addEventListener("click", clearBuffer);
