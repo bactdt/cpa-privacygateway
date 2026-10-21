@@ -222,7 +222,7 @@ func callSmokeSteps(api *C.cliproxy_plugin_api) error {
 }
 
 // panelEnabledSmoke 读取 PANEL_ENABLED=1 环境变量，决定冒烟流程按
-// panel.enabled=true（注册声明面板、GET panel 返回 200）还是默认关闭路径验证。
+// panel.enabled=true（注册声明 trace 页面、GET trace 返回 200/HTML）还是默认关闭路径验证。
 func panelEnabledSmoke() bool {
 	return os.Getenv("PANEL_ENABLED") == "1"
 }
@@ -331,36 +331,71 @@ func stepManagement(api *C.cliproxy_plugin_api) error {
 	}
 	fmt.Println("smoke: management.register OK")
 
-	raw, err = callPlugin(api, "management.handle", []byte(`{"Method":"GET","Path":"panel"}`))
+	// 资源路由：trace 页面（panel.enabled=true 时 200/HTML，否则 404）。
+	handleResult, err := managementHandle(api, "GET", "trace")
 	if err != nil {
 		return err
-	}
-	env = smokeEnvelope{}
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return fail("management.handle", "信封不是合法 JSON: "+err.Error())
-	}
-	if !env.OK {
-		return envelopeFailure("management.handle", env.Error)
-	}
-	var handleResult struct {
-		StatusCode int    `json:"StatusCode"`
-		Body       []byte `json:"Body"`
-	}
-	if err := json.Unmarshal(env.Result, &handleResult); err != nil {
-		return fail("management.handle", "result 解码失败: "+err.Error())
 	}
 	wantStatus := 404
 	if panelEnabledSmoke() {
 		wantStatus = 200
 	}
 	if handleResult.StatusCode != wantStatus {
-		return fail("management.handle", fmt.Sprintf("PANEL_ENABLED=%v 时 StatusCode=%d，期望 %d", panelEnabledSmoke(), handleResult.StatusCode, wantStatus))
+		return fail("management.handle", fmt.Sprintf("PANEL_ENABLED=%v 时 GET trace StatusCode=%d，期望 %d", panelEnabledSmoke(), handleResult.StatusCode, wantStatus))
 	}
-	if panelEnabledSmoke() && !bytes.Contains(handleResult.Body, []byte("<!doctype html")) {
-		return fail("management.handle", "panel.enabled=true 时 Body 应为 HTML 页面")
+	if panelEnabledSmoke() && !bytes.Contains(bytes.ToLower(handleResult.Body), []byte("<!doctype html")) {
+		return fail("management.handle", "panel.enabled=true 时 GET trace Body 应为 HTML 页面")
+	}
+	// 数据路由：GET traces 返回 JSON 快照，DELETE 清空缓冲。
+	dataResult, err := managementHandle(api, "GET", "traces")
+	if err != nil {
+		return err
+	}
+	if panelEnabledSmoke() {
+		if dataResult.StatusCode != 200 {
+			return fail("management.handle", fmt.Sprintf("GET traces StatusCode=%d，期望 200", dataResult.StatusCode))
+		}
+		if !bytes.Contains(dataResult.Body, []byte(`"requests"`)) {
+			return fail("management.handle", "GET traces Body 应含 requests 字段: "+string(dataResult.Body))
+		}
+		delResult, errDel := managementHandle(api, "DELETE", "traces")
+		if errDel != nil {
+			return errDel
+		}
+		if delResult.StatusCode != 200 {
+			return fail("management.handle", fmt.Sprintf("DELETE traces StatusCode=%d，期望 200", delResult.StatusCode))
+		}
+	} else if dataResult.StatusCode != 404 {
+		return fail("management.handle", fmt.Sprintf("PANEL_ENABLED=false 时 GET traces StatusCode=%d，期望 404", dataResult.StatusCode))
 	}
 	fmt.Println("smoke: management.handle OK")
 	return nil
+}
+
+// managementHandle 调用 management.handle 并解出 ManagementResponse。
+func managementHandle(api *C.cliproxy_plugin_api, method, path string) (struct {
+	StatusCode int    `json:"StatusCode"`
+	Body       []byte `json:"Body"`
+}, error) {
+	var result struct {
+		StatusCode int    `json:"StatusCode"`
+		Body       []byte `json:"Body"`
+	}
+	raw, err := callPlugin(api, "management.handle", []byte(`{"Method":"`+method+`","Path":"`+path+`"}`))
+	if err != nil {
+		return result, err
+	}
+	var env smokeEnvelope
+	if errJSON := json.Unmarshal(raw, &env); errJSON != nil {
+		return result, fail("management.handle", "信封不是合法 JSON: "+errJSON.Error())
+	}
+	if !env.OK {
+		return result, envelopeFailure("management.handle", env.Error)
+	}
+	if err := json.Unmarshal(env.Result, &result); err != nil {
+		return result, fail("management.handle", "result 解码失败: "+err.Error())
+	}
+	return result, nil
 }
 
 func stepRequestComplete(api *C.cliproxy_plugin_api) error {

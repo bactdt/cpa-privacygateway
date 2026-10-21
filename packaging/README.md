@@ -39,9 +39,18 @@ CLIProxyAPI（CPA）隐私脱敏网关插件：请求发往上游前把凭据与
 
 没有加载时按顺序排查：`plugins.enabled` → 配置键是否为 `privacygateway` 且 `enabled: true` → 库文件名 → `.so` 是否已安装到 CPA 配置的插件发现目录（默认 `plugins/linux/amd64/`，相对于 CPA 工作目录）→ CPA 是否为 cgo 构建 → glibc 版本。
 
-### 管理页面
+### 管理页面（追踪日志）
 
-出于安全考虑，插件当前不注册浏览器管理页面，访问 `/v0/resource/plugins/privacygateway/panel` 会返回 404。包内仍保留 `panel.html` 和管理处理代码，后续如需启用可通过代码配置重新开放。
+默认不注册管理页面，`/v0/resource/plugins/privacygateway/trace` 与
+`/v0/management/privacygateway/traces` 均返回 404。需要排障时在配置中设
+`panel.enabled: true`（并保持 `trace_enabled: true`）后重启 CPA：
+
+- `GET /v0/resource/plugins/privacygateway/trace`：内嵌追踪页面（嵌入动态库，GET-only）。
+- `GET /v0/management/privacygateway/traces?since=&limit=&filter=`：内存中的请求级脱敏事件快照
+  （JSON，仅掩码信息，不含原值）；`DELETE` 同路径清空缓冲。
+- 页面可见性 = `panel.enabled` 且 `trace_enabled`；数据缓冲仅内存、重启即清空。
+
+包内 `panel.html` 保留为 file:// 本地排障用的旧版检测面板，不随插件注册。
 
 ## 升级与卸载
 
