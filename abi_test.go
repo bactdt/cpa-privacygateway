@@ -20,6 +20,7 @@ func resetABIState(t *testing.T) {
 	abiState.Lock()
 	abiState.plugin = nil
 	abiState.shuttingDown = false
+	abiState.panelEnabled = false
 	abiState.Unlock()
 }
 

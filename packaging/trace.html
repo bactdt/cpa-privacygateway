@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私脱敏日志</title>
+<style>
+:root { color-scheme: light dark; }
+body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; line-height: 1.5; }
+h1 { font-size: 1.1rem; margin: 0 0 .75rem; }
+.meta { font-size: .85rem; opacity: .8; margin-bottom: 1rem; }
+table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+th, td { border: 1px solid rgba(127,127,127,.35); padding: .3rem .5rem; text-align: left; vertical-align: top; }
+th { position: sticky; top: 0; background: Canvas; }
+code { font-family: ui-monospace, monospace; }
+.empty { opacity: .7; padding: 2rem 0; text-align: center; }
+.err { color: #c0392b; }
+</style>
+</head>
+<body>
+<h1>隐私脱敏日志</h1>
+<div class="meta" id="meta">加载中…</div>
+<div id="notice"></div>
+<table id="tbl" hidden>
+<thead><tr>
+  <th>时间</th><th>RequestID</th><th>TraceID</th><th>结局</th><th>HTTP</th><th>检出</th><th>计数</th><th>事件</th>
+</tr></thead>
+<tbody id="rows"></tbody>
+</table>
+<div class="empty" id="empty" hidden>暂无追踪记录</div>
+<script>
+"use strict";
+const KEY = "privacygateway.managementKey";
+const qs = new URLSearchParams(location.search);
+const BASE = (location.protocol === "file:" || !location.origin || location.origin === "null")
+  ? "http://127.0.0.1:8317"
+  : location.origin;
+const state = { since: 0, filter: "", key: sessionStorage.getItem(KEY) || "", inFlight: null };
+
+function el(id){ return document.getElementById(id); }
+function notice(msg, isErr){
+  const n = el("notice");
+  n.textContent = msg || "";
+  n.className = isErr ? "err" : "";
+}
+function fmtTime(iso){
+  if(!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleTimeString();
+}
+function fmtCounts(counts){
+  if(!counts) return "";
+  return Object.entries(counts).map(([k,v]) => k + ":" + v).join(" ");
+}
+function fmtFields(f){
+  if(!f) return "";
+  return Object.entries(f).map(([k,v]) => k + "=" + (typeof v === "object" ? JSON.stringify(v) : v)).join(" ");
+}
+function render(snap){
+  el("meta").textContent =
+    "buffered=" + snap.buffered + " evicted=" + snap.evicted + " next_since=" + snap.next_since +
+    " limits=" + JSON.stringify(snap.limits || {});
+  if(snap.plugin && snap.plugin.trace_enabled === false){
+    notice("追踪已关闭：在配置中设置 trace_enabled: true");
+  } else {
+    notice("");
+  }
+  const rows = snap.requests || [];
+  const tbody = el("rows");
+  tbody.textContent = "";
+  el("tbl").hidden = rows.length === 0;
+  el("empty").hidden = rows.length !== 0;
+  const t0 = rows.length ? new Date(rows[rows.length-1].first_seen).getTime() : 0;
+  for(const r of rows){
+    const tr = document.createElement("tr");
+    const first = new Date(r.first_seen).getTime();
+    const cells = [
+      fmtTime(r.first_seen),
+      r.request_id || "",
+      r.trace_id || "",
+      r.outcome || "",
+      r.status != null ? r.status : "",
+      r.finding_total != null ? r.finding_total : "",
+      fmtCounts(r.counts),
+    ];
+    for(const c of cells){
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    const td = document.createElement("td");
+    const ul = document.createElement("ul");
+    for(const ev of (r.events || [])){
+      const li = document.createElement("li");
+      const off = new Date(ev.at).getTime() - t0;
+      li.textContent = "+" + off + "ms " + ev.stage + " " + fmtFields(ev.fields);
+      ul.appendChild(li);
+    }
+    td.appendChild(ul);
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+  state.since = snap.next_since != null ? snap.next_since : state.since;
+}
+async function load(){
+  try{
+    if(state.inFlight){ state.inFlight.abort(); }
+    const ctl = new AbortController();
+    state.inFlight = ctl;
+    const url = BASE + "/v0/management/privacygateway/traces?since=" + state.since +
+      (state.filter ? "&filter=" + encodeURIComponent(state.filter) : "");
+    const headers = state.key ? { "X-Management-Key": state.key } : {};
+    const resp = await fetch(url, { headers, cache: "no-store", signal: ctl.signal });
+    if(!resp.ok){ notice("加载失败：HTTP " + resp.status, true); return; }
+    render(await resp.json());
+  }catch(e){
+    if(e && e.name === "AbortError"){ return; }
+    notice("加载失败：" + e, true);
+  }finally{
+    state.inFlight = null;
+  }
+}
+function boot(){
+  if(qs.get("key")){ state.key = qs.get("key"); sessionStorage.setItem(KEY, state.key); }
+  if(qs.get("filter")){ state.filter = qs.get("filter"); }
+  load();
+  setInterval(load, 3000);
+}
+boot();
+</script>
+</body>
+</html>
