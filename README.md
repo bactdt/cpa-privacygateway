@@ -118,6 +118,13 @@ make package
 
 发布版本由 GitHub Actions 在推送 `v*` 标签时构建并上传 Release。发布包只提供 Linux amd64 动态库。
 
+发布流程（`release.yml` 会在 tag push 时**重新构建并覆盖** Release 资产，本地 `make package` 的 zip/校验值不可直接用于 `plugin.json`）：
+
+1. bump `plugin.go` 的 `pluginVersion`（及 `plugin.yaml`/README 中的版本引用），提交后打 `v*` 标签并推送。
+2. 等待 `Release plugin` workflow 完成（CI 重新打包 zip 并上传，附带 `checksums.txt`）。
+3. 从 **CI 发布后的资产** 取 `sha256` 与 `size`，回写 `plugin.json` 的 `install.artifacts[0]` 并推送。
+4. 验证：按 `plugin.json` 的 `url` 下载资产，`sha256sum` 与 `plugin.json` 一致（CPA 插件商店安装时会校验，不一致报 502 `plugin_install_failed`）。
+
 ## 许可
 
 本项目使用 [MIT License](LICENSE)。
