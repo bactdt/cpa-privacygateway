@@ -17,6 +17,7 @@ func enablePanelForTrace(t *testing.T) {
 	resetABIState(t)
 	abiState.Lock()
 	abiState.panelEnabled = true
+	abiState.traceEnabled = true
 	abiState.Unlock()
 	t.Cleanup(func() { resetABIState(t) })
 }
@@ -238,6 +239,59 @@ func TestTracePageServesEmbeddedHTML(t *testing.T) {
 	folded := callManagement(t, http.MethodGet, "/v0/resource/plugins/privacygateway/trace")
 	if folded.StatusCode != http.StatusOK {
 		t.Errorf("资源路径折叠 GET status = %d，期望 200", folded.StatusCode)
+	}
+}
+
+// TestManagementVisibleRequiresBothSwitches 覆盖 TD-6 联动语义：
+// panel.enabled=true 但 trace_enabled=false 时不声明管理能力、路由与页面均 404。
+func TestManagementVisibleRequiresBothSwitches(t *testing.T) {
+	resetABIState(t)
+	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
+		lifecycleRequest(t, []byte("panel:\n  enabled: true\ntrace_enabled: false\n"))); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { resetABIState(t) })
+
+	raw, err := handleABIMethod(context.Background(), pluginabi.MethodManagementRegister, nil)
+	if err != nil {
+		t.Fatalf("management.register: %v", err)
+	}
+	var env struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Capabilities map[string]bool `json:"capabilities"`
+			Resources    []struct {
+				Path string `json:"Path"`
+			} `json:"resources"`
+			Routes []json.RawMessage `json:"routes"`
+		} `json:"result"`
+	}
+	if errDecode := json.Unmarshal(raw, &env); errDecode != nil || !env.OK {
+		t.Fatalf("信封异常：%s", raw)
+	}
+	if env.Result.Capabilities["management_api"] {
+		t.Errorf("trace_enabled=false 时 management_api 不应声明为 true：%s", raw)
+	}
+	if len(env.Result.Resources) != 0 || len(env.Result.Routes) != 0 {
+		t.Errorf("trace_enabled=false 时 resources/routes 应为空：%s", raw)
+	}
+	for _, probe := range []struct{ method, path string }{
+		{http.MethodGet, "trace"},
+		{http.MethodGet, "traces"},
+		{http.MethodDelete, "traces"},
+	} {
+		if got := callManagement(t, probe.method, probe.path).StatusCode; got != http.StatusNotFound {
+			t.Errorf("%s %s status = %d，期望 404", probe.method, probe.path, got)
+		}
+	}
+
+	// 重新打开 trace 后（panel 仍开）管理可达。
+	if _, err := handleABIRegister(context.Background(), pluginabi.MethodPluginRegister,
+		lifecycleRequest(t, []byte("panel:\n  enabled: true\ntrace_enabled: true\n"))); err != nil {
+		t.Fatalf("re-register: %v", err)
+	}
+	if got := callManagement(t, http.MethodGet, "trace").StatusCode; got != http.StatusOK {
+		t.Errorf("双开关打开后 GET trace status = %d，期望 200", got)
 	}
 }
 

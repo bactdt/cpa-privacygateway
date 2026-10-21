@@ -149,14 +149,18 @@ var abiState = struct {
 	// management.register/handle 据此决定是否声明面板资源与是否服务页面。
 	// 从未注册过时为零值 false（面板关闭），与历史默认行为一致。
 	panelEnabled bool
+	// traceEnabled 保存最近一次成功注册配置的 trace_enabled 取值。
+	// 管理可见性 = panelEnabled && traceEnabled（TD-6 联动语义）。
+	traceEnabled bool
 }{}
 
 const maxCGoBytesLen = C.size_t(1<<31 - 1)
 
-// resetPanelEnabledLocked 清除面板开关（调用方须持有 abiState 写锁）：
-// shutdown 与重新 init 都视为面板不可达，未重新 register 前保持关闭。
-func resetPanelEnabledLocked() {
+// resetManagementLocked 清除管理可见性开关（调用方须持有 abiState 写锁）：
+// shutdown 与重新 init 都视为管理页面不可达，未重新 register 前保持关闭。
+func resetManagementLocked() {
 	abiState.panelEnabled = false
+	abiState.traceEnabled = false
 }
 
 //export cliproxy_plugin_init
@@ -167,7 +171,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, pluginAPI *C.cliproxy_plugi
 	abiState.Lock()
 	abiState.host = host
 	abiState.shuttingDown = false
-	resetPanelEnabledLocked()
+	resetManagementLocked()
 	abiState.Unlock()
 
 	pluginAPI.abi_version = C.uint32_t(pluginabi.ABIVersion)
@@ -225,7 +229,7 @@ func PrivacyGatewayPluginShutdown() {
 	}
 	abiState.plugin = nil
 	abiState.host = nil
-	resetPanelEnabledLocked()
+	resetManagementLocked()
 	abiState.Unlock()
 	abiState.inFlight.Wait()
 }
@@ -341,30 +345,34 @@ func handleABIRegister(ctx context.Context, method string, request []byte) ([]by
 	abiState.lastFailClosed = cfg.failClosed()
 	abiState.hadConfig = true
 	abiState.panelEnabled = cfg.Panel.Enabled
+	abiState.traceEnabled = cfg.traceOn()
 	abiState.Unlock()
 	go p.runJanitor(stop)
 	// 用本次注册的取值构造信封，避免并发重配在解锁后翻转全局状态
 	// 导致响应声明错误的能力位。
-	return registrationEnvelope(cfg.Panel.Enabled)
+	return registrationEnvelope(cfg.Panel.Enabled, cfg.traceOn())
 }
 
 func rejectLifecycleConfig(ctx context.Context, method string, errParse error) ([]byte, error) {
 	abiState.RLock()
 	hasPrevious := abiState.plugin != nil
 	panelEnabled := abiState.panelEnabled
+	traceEnabled := abiState.traceEnabled
 	abiState.RUnlock()
 	if method == pluginabi.MethodPluginReconfigure && hasPrevious {
 		logHost(ctx, logLevelError, "privacy gateway rejected new config, keeping previous config", map[string]any{"error": errParse.Error()})
-		return registrationEnvelope(panelEnabled)
+		return registrationEnvelope(panelEnabled, traceEnabled)
 	}
 	return nil, errParse
 }
 
-func registrationEnvelope(panelEnabled bool) ([]byte, error) {
+// registrationEnvelope 按管理可见性（panel.enabled 且 trace_enabled）声明 management_api 能力。
+func registrationEnvelope(panelEnabled, traceEnabled bool) ([]byte, error) {
+	visible := panelEnabled && traceEnabled
 	return abiOKEnvelope(abiRegistration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata:      pluginMetadata(),
-		Capabilities:  abiCapabilities{RequestInterceptor: true, RequestLifecyclePlugin: true, ResponseInterceptor: true, StreamChunkInterceptor: true, ManagementAPI: panelEnabled},
+		Capabilities:  abiCapabilities{RequestInterceptor: true, RequestLifecyclePlugin: true, ResponseInterceptor: true, StreamChunkInterceptor: true, ManagementAPI: visible},
 	})
 }
 

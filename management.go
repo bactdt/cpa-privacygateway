@@ -22,6 +22,14 @@ func panelEnabled() bool {
 	return abiState.panelEnabled
 }
 
+// managementVisible 报告管理资源是否可达：panel.enabled 且 trace_enabled
+// （TD-6 联动语义）。任一关闭则注册声明空 resources，页面与数据路由返回 404。
+func managementVisible() bool {
+	abiState.RLock()
+	defer abiState.RUnlock()
+	return abiState.panelEnabled && abiState.traceEnabled
+}
+
 type abiResourceRoute struct {
 	Path        string
 	Menu        string
@@ -69,7 +77,7 @@ func handleABIManagement(ctx context.Context, method string, request []byte) (ra
 
 	switch method {
 	case pluginabi.MethodManagementRegister:
-		if !panelEnabled() {
+		if !managementVisible() {
 			return abiOKEnvelope(abiManagementRegistrationResponse{Routes: []abiManagementRoute{}, Resources: []abiResourceRoute{}})
 		}
 		// RT-1：trace 路由替换原 panel 资源路由（需求 12.1–12.4）。

@@ -79,10 +79,12 @@ func TestManagementEnabledByConfig(t *testing.T) {
 	resetABIState(t)
 	abiState.Lock()
 	abiState.panelEnabled = true
+	abiState.traceEnabled = true
 	abiState.Unlock()
 	t.Cleanup(func() {
 		abiState.Lock()
 		abiState.panelEnabled = false
+		abiState.traceEnabled = false
 		abiState.Unlock()
 	})
 
@@ -195,6 +197,7 @@ func TestManagementHandleRejectsNonGETOnPage(t *testing.T) {
 	resetABIState(t)
 	abiState.Lock()
 	abiState.panelEnabled = true
+	abiState.traceEnabled = true
 	abiState.Unlock()
 	t.Cleanup(func() { resetABIState(t) })
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, ""} {
@@ -257,7 +260,7 @@ func TestManagementIndependentOfRegistration(t *testing.T) {
 }
 
 func TestRegistrationDoesNotDeclareManagementAPI(t *testing.T) {
-	raw, err := registrationEnvelope(false)
+	raw, err := registrationEnvelope(false, true)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -297,6 +300,7 @@ func TestManagementResponseBodyIsBase64(t *testing.T) {
 	resetABIState(t)
 	abiState.Lock()
 	abiState.panelEnabled = true
+	abiState.traceEnabled = true
 	abiState.Unlock()
 	t.Cleanup(func() { resetABIState(t) })
 	payload, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: "trace"})
@@ -341,12 +345,13 @@ func TestPanelDisabledAfterShutdownAndReinit(t *testing.T) {
 	}
 
 	// 重新 init 走同一重置路径（cgo 导出函数无法在测试中直接调用，
-	// 这里验证其共享的 resetPanelEnabledLocked 语义）。
+	// 这里验证其共享的 resetManagementLocked 语义）。
 	abiState.Lock()
 	abiState.panelEnabled = true
-	resetPanelEnabledLocked()
+	abiState.traceEnabled = true
+	resetManagementLocked()
 	abiState.Unlock()
-	if panelEnabled() {
-		t.Error("重新 init 路径重置后未重新 register，panelEnabled 应保持 false")
+	if panelEnabled() || managementVisible() {
+		t.Error("重新 init 路径重置后未重新 register，panelEnabled/traceEnabled 应保持 false")
 	}
 }

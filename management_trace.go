@@ -72,7 +72,7 @@ func managementTraceAllowResponse(status int, allow, message string) pluginapi.M
 
 // handleTracePage 服务内嵌 Trace_Page（需求 12.2–12.3，替换原 panel 页面）。
 func handleTracePage(req abiManagementHandleRequest) ([]byte, error) {
-	if !panelEnabled() {
+	if !managementVisible() {
 		return abiOKEnvelope(managementPlainTextResponse(http.StatusNotFound, "privacy gateway management resource not found"))
 	}
 	if req.Method != http.MethodGet {
@@ -92,7 +92,7 @@ func handleTracePage(req abiManagementHandleRequest) ([]byte, error) {
 
 // handleTraceData 处理 GET / DELETE /v0/management/privacygateway/traces（需求 13）。
 func handleTraceData(ctx context.Context, req abiManagementHandleRequest) ([]byte, error) {
-	if !panelEnabled() {
+	if !managementVisible() {
 		return abiOKEnvelope(managementPlainTextResponse(http.StatusNotFound, "privacy gateway management resource not found"))
 	}
 	switch req.Method {
