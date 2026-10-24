@@ -25,6 +25,7 @@
 | [exec-plans/active/plugin-packaging.md](exec-plans/active/plugin-packaging.md) | CPA 插件发布包计划 | 开发快照 2026-10-10 |
 | [exec-plans/active/request-trace-log.md](exec-plans/active/request-trace-log.md) | 请求脱敏追踪日志计划 | 开发快照 2026-10-11 |
 | [exec-plans/active/stream-restore-fix.md](exec-plans/active/stream-restore-fix.md) | 流式还原裸载荷丢块修复计划 | 开发快照 2026-10-11 |
+| [exec-plans/active/tool-output-placeholder-leak.md](exec-plans/active/tool-output-placeholder-leak.md) | 工具输出误脱敏与流式占位符泄漏修复计划 | 开发快照 2026-10-24 |
 | [exec-plans/tech-debt-tracker.md](exec-plans/tech-debt-tracker.md) | 技术债台账 | 已校验 2026-10-09 |
 
 ## 质量与流程

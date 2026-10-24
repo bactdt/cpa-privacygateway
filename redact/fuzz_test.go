@@ -14,8 +14,18 @@ func FuzzDetect(f *testing.F) {
 	f.Add("id 11010519491231002X card 4111 1111 1111 1111")
 	f.Add("\x00\xff\xfe mixed bytes \u4e2d\u6587")
 	f.Add(strings.Repeat("A", 512))
+	f.Add("DB_PASSWORD=Summer2024abc")
+	f.Add(`export HEROKU_API_KEY="abcdef1234567890"`)
+	f.Add("id 123e4567-e89b-12d3-a456-426614174000")
+	f.Add("process_id: 1728546241000abcdef")
+	f.Add("workspace-snapshot-1728546241000abcdef.tar.gz")
+	f.Add("job proc_1728546241000abcdef")
+	f.Add("PWD=/home/user/project")
+	f.Add(`{"apiKey":"abcdef1234567890"}`)
 	f.Fuzz(func(t *testing.T, text string) {
 		cfg := DefaultConfig()
+		cfg.SafeIDPrefixes = []string{"proc_"}
+		cfg.SafeIDKeys = []string{"session_id"}
 		spans, _ := cfg.Detect(text, 0, nil)
 		for _, s := range spans {
 			if s.start < 0 || s.end > len(text) || s.start >= s.end {
@@ -23,28 +33,46 @@ func FuzzDetect(f *testing.F) {
 			}
 		}
 		resolveSpans(spans)
+		for _, kv := range scanKV(text) {
+			if kv.valStart < 0 || kv.valEnd > len(text) || kv.valStart >= kv.valEnd {
+				t.Fatalf("非法 kv 区间 [%d,%d) len=%d", kv.valStart, kv.valEnd, len(text))
+			}
+			if !isSensitiveKey(kv.key) && isSafeIDKey(kv.key, cfg.SafeIDKeys) {
+				if propOverlaps(kv.valStart, kv.valEnd, propSpansOfKind(spans, KindEntropy)) {
+					t.Fatalf("安全 id 键值仍被 entropy 标记: key=%q value=%q", kv.key, text[kv.valStart:kv.valEnd])
+				}
+			}
+		}
 	})
 }
 
-func FuzzWalkJSON(f *testing.F) {
+func FuzzRedactJSON(f *testing.F) {
 	f.Add([]byte(`{"messages":[{"content":"sk-abcdefghijklmnop1234"}]}`))
 	f.Add([]byte(`{"input":["text1","text2"],"meta":{"nested":{"text":"deep"}}}`))
 	f.Add([]byte(`{"tool":"fn","parameters":{"query":"x"}}`))
 	f.Add([]byte(`{"a":"\u00e4\ud83d\ude00","b":[1,2.5,true,null]}`))
 	f.Add([]byte(``))
+	f.Add([]byte(`{"input":[{"type":"function_call_output","output":"sk-abcdefghijklmnop1234"}]}`))
+	f.Add([]byte(`{"input":[{"output":"sk-abcdefghijklmnop1234","type":"custom_tool_call_output"}]}`))
+	f.Add([]byte(`{"input":[{"type":"message","output":"sk-abcdefghijklmnop1234"}]}`))
+	f.Add([]byte(`{"metadata":{"output":"sk-abcdefghijklmnop1234"}}`))
+	f.Add([]byte(`{"input":[{"type":"function_call_output","output":"DB_PASSWORD=Summer2024abc"}]}`))
 	f.Fuzz(func(t *testing.T, body []byte) {
 		m, err := NewMapping(4096, 1<<20)
 		if err != nil {
 			t.Skip()
 		}
 		cfg := DefaultConfig()
-		for _, format := range []string{"openai", "anthropic", "gemini", ""} {
+		for _, format := range []string{"openai", "anthropic", "gemini", "openai-response", "codex", ""} {
 			out, count, err := RedactJSON(format, body, m, cfg, WalkOptions{Format: format})
 			if err != nil && !errors.Is(err, ErrMalformedJSON) {
 				t.Fatalf("format=%q 意外错误: %v", format, err)
 			}
 			if count > 0 && len(out) == 0 {
 				t.Fatalf("count>0 但输出为空")
+			}
+			if err == nil && !json.Valid(out) {
+				t.Fatalf("format=%q 输出非法 JSON: %q", format, out)
 			}
 		}
 	})

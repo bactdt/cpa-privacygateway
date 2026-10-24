@@ -19,6 +19,9 @@ type WalkOptions struct {
 	// OnFinding 非 nil 时，RedactJSON 每写入一个占位符回调一次（需求 4.1）；
 	// 为 nil 时不调用 MaskPreview/RenderPath，输出与未接线时逐字节相同（需求 4.4）。
 	OnFinding FindingSink
+	// OnStale 非 nil 时，对被扫描字段中 nonce 不属于本请求的占位符逐个回调；
+	// 参数为字段路径与掩码样例（[[PG_<4 位>…_<seq>]]），不含原值。
+	OnStale func(path []string, sample string)
 }
 
 type replacement struct {
@@ -89,6 +92,7 @@ func RedactJSON(format string, body []byte, m *Mapping, cfg Config, opts WalkOpt
 	}
 	visitor := func(path []string, toolArg, arrayText bool, value string) (string, bool, error) {
 		if toolArg {
+			reportStale(path, value, m, opts.OnStale)
 			replaced, count, err := m.RedactObserved(value, 0, cfg, path, opts.OnFinding)
 			if err != nil {
 				return "", false, err
@@ -105,6 +109,7 @@ func RedactJSON(format string, body []byte, m *Mapping, cfg Config, opts WalkOpt
 		if !textKeys[key] && !arrayText {
 			return "", false, nil
 		}
+		reportStale(path, value, m, opts.OnStale)
 		replaced, count, err := m.RedactObserved(value, 0, cfg, path, opts.OnFinding)
 		if err != nil {
 			return "", false, err
@@ -114,7 +119,8 @@ func RedactJSON(format string, body []byte, m *Mapping, cfg Config, opts WalkOpt
 		}
 		return replaced, true, nil
 	}
-	rebuilt, count, err := transformJSON(body, maxDepth, toolKeys, visitor)
+	scanToolOutput := format == formatResponses || format == "codex"
+	rebuilt, count, err := transformJSON(body, maxDepth, toolKeys, scanToolOutput, visitor)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -132,7 +138,7 @@ func RestoreJSON(body []byte, m *Mapping) ([]byte, int, error) {
 		}
 		return replaced, true, nil
 	}
-	return transformJSON(body, 64, nil, visitor)
+	return transformJSON(body, 64, nil, false, visitor)
 }
 
 // RestoreJSONCounted 是 RestoreJSON 的观测版本：输出逐字节相同（需求 4.7），
@@ -156,7 +162,7 @@ func RestoreJSONCounted(body []byte, m *Mapping) ([]byte, RestoreJSONStats, erro
 		}
 		return replaced, true, nil
 	}
-	out, _, err := transformJSON(body, 64, nil, visitor)
+	out, _, err := transformJSON(body, 64, nil, false, visitor)
 	return out, stats, err
 }
 
@@ -180,10 +186,10 @@ func (d *offsetDecoder) token() (json.Token, error) {
 	return tok, err
 }
 
-func transformJSON(body []byte, maxDepth int, toolArgKeys map[string]bool, visit func(path []string, toolArg, arrayText bool, value string) (string, bool, error)) ([]byte, int, error) {
+func transformJSON(body []byte, maxDepth int, toolArgKeys map[string]bool, scanToolOutput bool, visit func(path []string, toolArg, arrayText bool, value string) (string, bool, error)) ([]byte, int, error) {
 	dec := &offsetDecoder{dec: json.NewDecoder(bytes.NewReader(body))}
 	var replacements []replacement
-	if err := walkValue(dec, body, nil, false, false, toolArgKeys, maxDepth, visit, &replacements); err != nil {
+	if err := walkValue(dec, body, nil, false, false, toolArgKeys, maxDepth, scanToolOutput, visit, &replacements); err != nil {
 		if errors.Is(err, ErrCapacity) || errors.Is(err, ErrFindings) {
 			return nil, 0, err
 		}
@@ -201,7 +207,7 @@ func transformJSON(body []byte, maxDepth int, toolArgKeys map[string]bool, visit
 	return applyReplacements(body, replacements), len(replacements), nil
 }
 
-func walkValue(dec *offsetDecoder, body []byte, path []string, toolArg, arrayText bool, toolArgKeys map[string]bool, depth int, visit func([]string, bool, bool, string) (string, bool, error), out *[]replacement) error {
+func walkValue(dec *offsetDecoder, body []byte, path []string, toolArg, arrayText bool, toolArgKeys map[string]bool, depth int, scanToolOutput bool, visit func([]string, bool, bool, string) (string, bool, error), out *[]replacement) error {
 	if depth <= 0 {
 		return errors.New("json nesting too deep")
 	}
@@ -213,6 +219,9 @@ func walkValue(dec *offsetDecoder, body []byte, path []string, toolArg, arrayTex
 	case json.Delim:
 		switch value {
 		case '{':
+			scanOutput := scanToolOutput && isInputEntry(path)
+			objectType := ""
+			var deferred *deferredString
 			for dec.dec.More() {
 				keyToken, err := dec.token()
 				if err != nil {
@@ -227,14 +236,52 @@ func walkValue(dec *offsetDecoder, body []byte, path []string, toolArg, arrayTex
 					childToolArg = true
 				}
 				childPath := appendPath(path, key)
+				if scanOutput && (key == "type" || key == "output") {
+					tok, err := dec.token()
+					if err != nil {
+						return err
+					}
+					text, isString := tok.(string)
+					if key == "type" {
+						if isString {
+							objectType = text
+						} else if err := skipValue(dec, tok, depth-1); err != nil {
+							return err
+						}
+						continue
+					}
+					if isString {
+						deferred = &deferredString{
+							path: childPath, toolArg: childToolArg, value: text,
+							start: dec.start, end: dec.end,
+						}
+					} else if err := skipValue(dec, tok, depth-1); err != nil {
+						return err
+					}
+					continue
+				}
 				// 对象子树不继承数组文本上下文，避免 text 键数组内的
 				// 结构对象字段被误脱敏（只扫直接字符串元素）。
-				if err := walkValue(dec, body, childPath, childToolArg, false, toolArgKeys, depth-1, visit, out); err != nil {
+				if err := walkValue(dec, body, childPath, childToolArg, false, toolArgKeys, depth-1, scanToolOutput, visit, out); err != nil {
 					return err
 				}
 			}
-			_, err = dec.token()
-			return err
+			if _, err := dec.token(); err != nil {
+				return err
+			}
+			if deferred != nil {
+				forceText := objectType == "function_call_output" || objectType == "custom_tool_call_output"
+				replaced, ok, err := visit(deferred.path, deferred.toolArg, forceText, deferred.value)
+				if err != nil {
+					return err
+				}
+				if ok {
+					if err := appendStringReplacement(out, body, deferred.start, deferred.end, replaced); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		case '[':
 			index := 0
 			// 数组的直接字符串元素按数组文本上下文扫描；
@@ -242,7 +289,7 @@ func walkValue(dec *offsetDecoder, body []byte, path []string, toolArg, arrayTex
 			directArrayText := arrayText || textKeys[lastKey(path)]
 			for dec.dec.More() {
 				childPath := appendPath(path, strconv.Itoa(index))
-				if err := walkValue(dec, body, childPath, toolArg, directArrayText, toolArgKeys, depth-1, visit, out); err != nil {
+				if err := walkValue(dec, body, childPath, toolArg, directArrayText, toolArgKeys, depth-1, scanToolOutput, visit, out); err != nil {
 					return err
 				}
 				index++
@@ -259,22 +306,77 @@ func walkValue(dec *offsetDecoder, body []byte, path []string, toolArg, arrayTex
 		if !ok {
 			return nil
 		}
-		literalStart := int(dec.start)
-		window := body[literalStart:int(dec.end)]
-		quote := bytes.IndexByte(window, '"')
-		if quote < 0 {
-			return nil
-		}
-		literalStart += quote
-		literalEnd := int(dec.end)
-		encoded, err := encodeStringLiteral(replaced)
+		return appendStringReplacement(out, body, dec.start, dec.end, replaced)
+	default:
+		return nil
+	}
+}
+
+// isInputEntry 判断路径是否为 Responses 请求 input 数组的直接元素（input[i]）。
+func isInputEntry(path []string) bool {
+	return len(path) == 2 && path[0] == "input" && isArrayIndex(path[1])
+}
+
+type deferredString struct {
+	path    []string
+	toolArg bool
+	value   string
+	start   int64
+	end     int64
+}
+
+// skipValue 消费已读出的首个 token 及其剩余子树。
+func skipValue(dec *offsetDecoder, tok json.Token, depth int) error {
+	if depth <= 0 {
+		return errors.New("json nesting too deep")
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || (delim != '{' && delim != '[') {
+		return nil
+	}
+	for dec.dec.More() {
+		child, err := dec.token()
 		if err != nil {
 			return err
 		}
-		*out = append(*out, replacement{start: literalStart, end: literalEnd, value: encoded})
+		if err := skipValue(dec, child, depth-1); err != nil {
+			return err
+		}
+	}
+	_, err := dec.token()
+	return err
+}
+
+// appendStringReplacement 把字符串 token 的替换结果按字面量区间追加到 out。
+func appendStringReplacement(out *[]replacement, body []byte, start, end int64, replaced string) error {
+	literalStart := int(start)
+	window := body[literalStart:int(end)]
+	quote := bytes.IndexByte(window, '"')
+	if quote < 0 {
 		return nil
-	default:
-		return nil
+	}
+	literalStart += quote
+	encoded, err := encodeStringLiteral(replaced)
+	if err != nil {
+		return err
+	}
+	*out = append(*out, replacement{start: literalStart, end: int(end), value: encoded})
+	return nil
+}
+
+// reportStale 对被扫描字段中其他 nonce 的占位符逐个回调，样例只含掩码。
+func reportStale(path []string, value string, m *Mapping, sink func([]string, string)) {
+	if sink == nil || m == nil {
+		return
+	}
+	nonce := m.Nonce()
+	for _, token := range placeholderRe.FindAllString(value, -1) {
+		tokenNonce := token[len(placeholderOpen) : len(placeholderOpen)+placeholderNonceHexLen]
+		if tokenNonce == nonce {
+			continue
+		}
+		seq := token[len(placeholderOpen)+placeholderNonceHexLen+1 : len(token)-len(placeholderClose)]
+		sink(path, placeholderOpen+tokenNonce[:4]+"…_"+seq+placeholderClose)
 	}
 }
 

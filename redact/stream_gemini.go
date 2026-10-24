@@ -72,6 +72,45 @@ func geminiPartTargets(rawContent json.RawMessage, pos, prefix string) []textTar
 	return targets
 }
 
+// planAntigravity 解读 antigravity 的裸 JSON 事件：顶层 `response` 对象内是
+// Gemini 结构，规划结果整体加 "response" 路径/键前缀；无 `response` 包装时
+// 退回普通 Gemini 规划。
+func planAntigravity(event []byte) (eventPlan, bool) {
+	var wrapper struct {
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(event, &wrapper); err != nil {
+		return eventPlan{}, false
+	}
+	if len(wrapper.Response) == 0 {
+		return planGemini(event)
+	}
+	plan, ok := planGemini(wrapper.Response)
+	if !ok {
+		return eventPlan{}, false
+	}
+	for i := range plan.targets {
+		segments := append([]string{"response"}, strings.Split(plan.targets[i].path, "\x00")...)
+		plan.targets[i].path = joinPath(segments...)
+		plan.targets[i].key = "response/" + plan.targets[i].key
+	}
+	for i := range plan.endPrefixes {
+		plan.endPrefixes[i] = "response/" + plan.endPrefixes[i]
+	}
+	return plan, true
+}
+
+// injectAntigravity 在顶层 response 对象内注入残留；无包装时退回 Gemini 注入。
+func injectAntigravity(event []byte, key, carry string) ([]byte, bool) {
+	var wrapper struct {
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(event, &wrapper); err != nil || len(wrapper.Response) == 0 {
+		return injectGemini(event, key, carry)
+	}
+	return injectGeminiAt(event, wrapper.Response, []string{"response"}, strings.TrimPrefix(key, "response/"), carry)
+}
+
 func isThought(raw json.RawMessage) bool {
 	return strings.TrimSpace(string(raw)) == "true"
 }
@@ -81,11 +120,17 @@ func isThought(raw json.RawMessage) bool {
 // content 缺 parts 时插入 "parts":[...]；candidate 缺 content 时插入
 // "content":{"role":"model","parts":[...]}。无法定位时返回 (event, false)。
 func injectGemini(event []byte, key, carry string) ([]byte, bool) {
+	return injectGeminiAt(event, event, nil, key, carry)
+}
+
+// injectGeminiAt 在 container（可为 event 的某个子对象）中定位 candidate，
+// 但插入路径以 base 为前缀写回 event。
+func injectGeminiAt(event, container []byte, base []string, key, carry string) ([]byte, bool) {
 	index, field, ok := parseGeminiKey(key)
 	if !ok {
 		return event, false
 	}
-	pos, content, ok := findGeminiCandidate(event, index)
+	pos, content, ok := findGeminiCandidate(container, index)
 	if !ok {
 		return event, false
 	}
@@ -95,7 +140,7 @@ func injectGemini(event []byte, key, carry string) ([]byte, bool) {
 	}
 	part += `}`
 
-	candidatePath := []string{"candidates", strconv.Itoa(pos)}
+	candidatePath := append(append([]string{}, base...), "candidates", strconv.Itoa(pos))
 	contentPath := append(append([]string{}, candidatePath...), "content")
 	if content == nil {
 		return insertInto(event, candidatePath, []byte(`"content":{"role":"model","parts":[`+part+`]}`))

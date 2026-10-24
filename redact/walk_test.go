@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -265,5 +266,122 @@ func TestRedactJSONFindingsErrorNoPartialRedaction(t *testing.T) {
 	}
 	if out != nil || count != 0 {
 		t.Errorf("不得输出部分脱敏正文：out=%q count=%d", out, count)
+	}
+}
+
+func TestRedactJSONResponsesToolOutput(t *testing.T) {
+	secret := "sk-" + strings.Repeat("Q", 20)
+	types := []string{"function_call_output", "custom_tool_call_output"}
+	orders := []struct{ name, body string }{
+		{"type first", `{"input":[{"type":"%s","call_id":"c1","output":"key %s"}]}`},
+		{"type last", `{"input":[{"call_id":"c1","output":"key %s","type":"%s"}]}`},
+	}
+	for _, typ := range types {
+		for _, order := range orders {
+			body := order.body
+			if order.name == "type first" {
+				body = strings.Replace(body, "%s", typ, 1)
+				body = strings.Replace(body, "%s", secret, 1)
+			} else {
+				body = strings.Replace(body, "%s", secret, 1)
+				body = strings.Replace(body, "%s", typ, 1)
+			}
+			for _, format := range []string{"openai-response", "codex"} {
+				m := mustMapping(t)
+				out, count, err := RedactJSON(format, []byte(body), m, DefaultConfig(), WalkOptions{Format: format})
+				if err != nil {
+					t.Fatalf("%s/%s: %v", typ, order.name, err)
+				}
+				if count != 1 || strings.Contains(string(out), secret) {
+					t.Fatalf("%s/%s/%s 未扫描 output：count=%d out=%s", format, typ, order.name, count, out)
+				}
+			}
+		}
+	}
+}
+
+func TestRedactJSONNonToolOutputUntouched(t *testing.T) {
+	secret := "sk-" + strings.Repeat("R", 20)
+	bodies := []string{
+		`{"input":[{"call_id":"c1","output":"key ` + secret + `"}]}`,
+		`{"input":[{"type":"message","call_id":"c1","output":"key ` + secret + `"}]}`,
+		`{"input":[{"type":"function_call","call_id":"c1","output":"key ` + secret + `"}]}`,
+		`{"metadata":{"type":"function_call_output","output":"key ` + secret + `"}}`,
+	}
+	for _, body := range bodies {
+		for _, format := range []string{"openai-response", "codex", "openai", "claude"} {
+			m := mustMapping(t)
+			out, count, err := RedactJSON(format, []byte(body), m, DefaultConfig(), WalkOptions{Format: format})
+			if err != nil {
+				t.Fatalf("%s: %v", format, err)
+			}
+			if count != 0 || string(out) != body {
+				t.Fatalf("%s 非工具 output 被改写：count=%d out=%s", format, count, out)
+			}
+		}
+	}
+}
+
+func TestRedactJSONOnStale(t *testing.T) {
+	m := mustMapping(t)
+	own, err := m.Placeholder("user@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other1 := "[[PG_ffffffffffffffff_1]]"
+	other2 := "[[PG_0000000000000000_22]]"
+	body := []byte(`{"content":"x ` + other1 + ` y ` + other2 + ` z ` + own + ` end"}`)
+
+	var got []string
+	var paths [][]string
+	opts := WalkOptions{OnStale: func(path []string, sample string) {
+		got = append(got, sample)
+		paths = append(paths, append([]string(nil), path...))
+	}}
+	out, count, err := RedactJSON("openai", body, m, DefaultConfig(), opts)
+	if err != nil {
+		t.Fatalf("RedactJSON: %v", err)
+	}
+	if count != 0 || !bytes.Equal(out, body) {
+		t.Fatalf("stale 占位符不应被改写：count=%d out=%s", count, out)
+	}
+	want := []string{"[[PG_ffff…_1]]", "[[PG_0000…_22]]"}
+	if len(got) != len(want) {
+		t.Fatalf("OnStale 回调 %v，want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("样例 %d = %q，want %q", i, got[i], want[i])
+		}
+	}
+	for _, path := range paths {
+		if len(path) != 1 || path[0] != "content" {
+			t.Errorf("路径 = %v，want [content]", path)
+		}
+	}
+
+	noSink, _, err := RedactJSON("openai", body, m, DefaultConfig(), WalkOptions{})
+	if err != nil {
+		t.Fatalf("RedactJSON nil sink: %v", err)
+	}
+	if !bytes.Equal(noSink, body) {
+		t.Fatalf("OnStale=nil 改变了输出：%s", noSink)
+	}
+}
+
+func TestRestoreJSONUnaffectedByToolOutputScan(t *testing.T) {
+	m := mustMapping(t)
+	ph, err := m.Placeholder("user@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"input":[{"type":"function_call_output","output":"key ` + ph + `"}]}`)
+	out, count, err := RestoreJSON(body, m)
+	if err != nil || count != 1 || !bytes.Contains(out, []byte("user@example.com")) {
+		t.Fatalf("RestoreJSON: out=%s count=%d err=%v", out, count, err)
+	}
+	counted, stats, err := RestoreJSONCounted(body, m)
+	if err != nil || stats.Restored != 1 || !bytes.Equal(counted, out) {
+		t.Fatalf("RestoreJSONCounted: out=%s stats=%+v err=%v", counted, stats, err)
 	}
 }

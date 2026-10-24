@@ -402,3 +402,83 @@ func TestDetectMaxFindingsReportsTruncated(t *testing.T) {
 		t.Errorf("allow 不计数时 3 个检出应全保留，实际 %d", kept)
 	}
 }
+
+func TestDetectExemptionsAndSecretContext(t *testing.T) {
+	uuid := "a3f1c2d4-5b6e-4f70-8a9b-0c1d2e3f4a5b"
+	proc := "proc_abcdefghijklmnopqrstuvwxyz01"
+	pathToken := "abcdefghijklmnopqrstuvwx1234"
+	cases := []struct {
+		name       string
+		text       string
+		cfg        func() Config
+		wantKind   Kind
+		rejectKind Kind
+	}{
+		{"uuid exempt", "session " + uuid + " done", DefaultConfig, "", KindEntropy},
+		{"filename body exempt", "saved workspace-snapshot-20261011-153045.tar.gz ok", DefaultConfig, "", KindEntropy},
+		{"url path still entropy", "https://hooks.slack.com/services/T0/B0/" + pathToken, DefaultConfig, KindEntropy, ""},
+		{"safe id key", "process_id: " + proc, DefaultConfig, "", KindEntropy},
+		{"proc plain still entropy", "Started process " + proc, DefaultConfig, KindEntropy, ""},
+		{"safe id prefix", "Started process " + proc, func() Config {
+			c := DefaultConfig()
+			c.SafeIDPrefixes = []string{"proc_"}
+			return c
+		}, "", KindEntropy},
+		{"safe id prefix case sensitive", "Started process PROC_abcdefghijklmnopqrstuvwxyz01", func() Config {
+			c := DefaultConfig()
+			c.SafeIDPrefixes = []string{"proc_"}
+			return c
+		}, KindEntropy, ""},
+		{"secret context wins over uuid", "HEROKU_API_KEY=" + uuid, DefaultConfig, KindSecretContext, KindEntropy},
+		{"secret context low entropy", "DB_PASSWORD=Summer2024abc", DefaultConfig, KindSecretContext, ""},
+		{"glpat still entropy", "token glpat-abcdefghijklmnopqrs1", DefaultConfig, KindEntropy, ""},
+		{"stripe key still detected", "STRIPE_KEY=sk_live_abcdefghijklmnopqrs1", DefaultConfig, KindEntropy, ""},
+		{"numeric sensitive value ignored", "TOKEN_TTL=3600", DefaultConfig, "", ""},
+		{"boolean sensitive value ignored", "ENABLE_TOKEN=true", DefaultConfig, "", ""},
+		{"pwd not sensitive", "PWD=/home/gh/project", DefaultConfig, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg()
+			spans, _ := cfg.Detect(tc.text, 0, nil)
+			if tc.wantKind != "" && len(spansOfKind(tc.text, spans, tc.wantKind)) == 0 {
+				t.Fatalf("缺少 %s 检出：%v", tc.wantKind, spans)
+			}
+			if tc.rejectKind != "" {
+				if got := spansOfKind(tc.text, spans, tc.rejectKind); len(got) != 0 {
+					t.Fatalf("不应有 %s 检出：%v", tc.rejectKind, got)
+				}
+			}
+		})
+	}
+
+	cfg := DefaultConfig()
+	cfg.SecretContext = false
+	text := "DB_PASSWORD=Summer2024abc"
+	spans, _ := cfg.Detect(text, 0, nil)
+	if got := spansOfKind(text, spans, KindSecretContext); len(got) != 0 {
+		t.Fatalf("SecretContext=false 仍检出：%v", got)
+	}
+
+	if got := MaskPreview(KindSecretContext, "Summer2024abc"); got != "[secret_context]" {
+		t.Fatalf("MaskPreview = %q", got)
+	}
+}
+
+func TestDetectCustomRuleAndAllowlistWithUUID(t *testing.T) {
+	uuid := "a3f1c2d4-5b6e-4f70-8a9b-0c1d2e3f4a5b"
+	cfg := DefaultConfig()
+	cfg.CustomRules = []string{uuid}
+	spans, _ := cfg.Detect("id "+uuid, 0, nil)
+	if got := spansOfKind("id "+uuid, spans, KindCustom); len(got) != 1 {
+		t.Fatalf("custom_rules 未命中 UUID：%v", spans)
+	}
+
+	m := newTestMapping(t, 0, 0)
+	cfg = DefaultConfig()
+	cfg.Allowlist = []string{uuid}
+	out, count, err := m.Redact("id "+uuid, 0, cfg)
+	if err != nil || count != 0 || out != "id "+uuid {
+		t.Fatalf("allowlist UUID 被替换：out=%q count=%d err=%v", out, count, err)
+	}
+}

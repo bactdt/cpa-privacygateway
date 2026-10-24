@@ -1,0 +1,43 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration test": {
+      "status": "passed",
+      "failingExample": "All TestBugCond* tests FAIL on unfixed code as expected.\nC1 TestBugCondUUIDNotEntropy: UUID a3f1c2d4-5b6e-4f70-8a9b-0c1d2e3f4a5b detected as {8 44 entropy}.\nC2 TestBugCondFilenameBody: 28-char body qgqruB5pnE6avg7ahnbda7lwXk1G detected as entropy inside qgqruB5pnE6avg7ahnbda7lwXk1G.tar.gz (also .tar/.log).\nC3 TestBugCondSafeIDKey: process_id: proc_gu1Z6kwaiyi9y4LquC1CIaZvtP detected as entropy; \"requestId\" value likewise.\nC4 TestBugCondSecretContext: DB_PASSWORD=Summer2024abc -> no spans; export API_TOKEN=abc12345xyz and \"client_secret\": \"s3cr3tValue\" also undetected.\nC5 TestBugCondResponsesToolOutput: function_call_output.output with sk-... unchanged, count=0; type-before-output and type-after-output both leak.\nC6 TestBugCondStalePlaceholder: WalkOptions.OnStale does not exist; stale [[PG_ffffffffffffffff_1]] is not reported.\nC7 TestBugCondStreamCarry: openai-sse / interactions-sse / codex-sse-frames / codex-single-lines / antigravity-bare all leak fragments, concatenated text stays \"A [[PG_<nonce>_1]] B [[PG_<nonce>_2]] C\" instead of \"A user@example.com B sk-abcdefghijklmnop1234 C\"; pending=0 but Leftover unreported.",
+      "lastRunTimestamp": 1792806117502
+    },
+    "2. Write preservation property tests (BEFORE implementing fix)": {
+      "status": "passed",
+      "lastRunTimestamp": 1792806225482
+    },
+    "3.11 属性测试与 fuzz 扩展": {
+      "status": "passed",
+      "lastRunTimestamp": 1792807437167
+    },
+    "4. Checkpoint - Ensure all tests pass": {
+      "status": "passed",
+      "lastRunTimestamp": 1792807437167
+    }
+  },
+  "executionHistory": {
+    "1. Write bug condition exploration test": [
+      {
+        "timestamp": 1792806117502
+      }
+    ],
+    "2. Write preservation property tests (BEFORE implementing fix)": [
+      {
+        "timestamp": 1792806225482
+      }
+    ],
+    "3.11 属性测试与 fuzz 扩展": [
+      {
+        "timestamp": 1792807437167
+      }
+    ],
+    "4. Checkpoint - Ensure all tests pass": [
+      {
+        "timestamp": 1792807437167
+      }
+    ]
+  }
+}

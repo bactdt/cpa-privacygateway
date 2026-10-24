@@ -2,6 +2,7 @@ package redact
 
 import (
 	"math/rand"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -193,7 +194,7 @@ func TestTextCarryStats(t *testing.T) {
 	tc.restoreText("k1", ph[5:], false)      // restored
 	tc.restoreText("k2", ph[12:], true)      // restored
 	want := StreamStats{Restored: 2, Carried: 2, MaxPending: 12}
-	if tc.stats != want {
+	if !reflect.DeepEqual(tc.stats, want) {
 		t.Fatalf("stats=%+v want %+v", tc.stats, want)
 	}
 }
@@ -223,7 +224,7 @@ func TestTextCarryTake(t *testing.T) {
 	tc.templates = map[string]streamTemplate{"k": {raw: []byte("{}")}}
 	before := tc.stats
 	tc.reset()
-	if tc.pendingBytes() != 0 || tc.templates != nil || tc.stats != before {
+	if tc.pendingBytes() != 0 || tc.templates != nil || !reflect.DeepEqual(tc.stats, before) {
 		t.Fatalf("reset: pending=%d templates=%v stats=%+v", tc.pendingBytes(), tc.templates, tc.stats)
 	}
 }
@@ -242,5 +243,69 @@ func TestTextCarryNilAndEmptyMapping(t *testing.T) {
 	}
 	if out := empty.restoreText("k", "", true); out != "" {
 		t.Fatalf("empty final %q", out)
+	}
+}
+
+func TestMaskDangling(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"[[PG_abcdef0123456789_12", "[[PG_abcd…"},
+		{"[[PG_ab", "[[PG_ab"},
+		{"0123456789abcdefghij", "0123456789abcde…"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := maskDangling(tc.in)
+		if got != tc.want {
+			t.Errorf("maskDangling(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if utf8.RuneCountInString(got) > danglingSampleMaxLen {
+			t.Errorf("样例超长：%q", got)
+		}
+	}
+}
+
+func TestStreamFlushLeftoverAtEnd(t *testing.T) {
+	s, phs := newPayloadFixture(t, "user@example.com")
+	nonce := s.mapping.Nonce()
+	s.text.carry = map[string]string{}
+	for _, key := range []string{"k1", "k2", "k3", "k4", "k5", "k6"} {
+		s.text.carry[key] = phs[0][:10]
+	}
+	out := s.Flush()
+	if len(out) != 0 {
+		t.Fatalf("Flush out = %q", out)
+	}
+	st := s.Stats()
+	if st.LeftoverAtEnd != 6 || st.Leftover != 6*10 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if len(st.DanglingSamples) != danglingSampleMax {
+		t.Fatalf("样例数 = %d，want %d", len(st.DanglingSamples), danglingSampleMax)
+	}
+	for _, sample := range st.DanglingSamples {
+		if utf8.RuneCountInString(sample) > danglingSampleMaxLen {
+			t.Errorf("样例超长：%q", sample)
+		}
+		if strings.Contains(sample, nonce[4:]) {
+			t.Errorf("样例泄露 nonce：%q", sample)
+		}
+	}
+	if s.Pending() != 0 {
+		t.Fatalf("Flush 后仍有暂扣：%d", s.Pending())
+	}
+}
+
+func TestStreamStatsSamplesCopied(t *testing.T) {
+	s, phs := newPayloadFixture(t, "user@example.com")
+	s.text.carry = map[string]string{"k": phs[0][:8]}
+	_ = s.Flush()
+	st := s.Stats()
+	if len(st.DanglingSamples) != 1 {
+		t.Fatalf("样例 = %v", st.DanglingSamples)
+	}
+	st.DanglingSamples[0] = "mutated"
+	again := s.Stats()
+	if again.DanglingSamples[0] != maskDangling(phs[0][:8]) {
+		t.Fatalf("Stats 未复制切片：%v", again.DanglingSamples)
 	}
 }

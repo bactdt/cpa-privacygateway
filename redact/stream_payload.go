@@ -9,10 +9,13 @@ import (
 
 // 宿主 SourceFormat 取值（见 design "Bug Details" 表）。
 const (
-	formatOpenAI    = "openai"
-	formatGemini    = "gemini"
-	formatClaude    = "claude"
-	formatResponses = "openai-response"
+	formatOpenAI       = "openai"
+	formatGemini       = "gemini"
+	formatClaude       = "claude"
+	formatResponses    = "openai-response"
+	formatCodex        = "codex"
+	formatAntigravity  = "antigravity"
+	formatInteractions = "interactions"
 )
 
 // payloadShape 是宿主流块的载荷形态。
@@ -45,15 +48,22 @@ func payloadShapeOf(chunk []byte) payloadShape {
 }
 
 // carryEnabled 判断某协议在某形态下是否启用跨事件暂扣：只有残留能在本形态
-// 投递时才暂扣（openai/gemini 注入裸 JSON；claude/openai-response 合成 SSE 帧）。
+// 投递时才暂扣。openai/gemini/antigravity 注入裸 JSON；SSE 协议合成帧。
 func carryEnabled(format string, shape payloadShape) bool {
 	switch format {
-	case formatOpenAI, formatGemini:
+	case formatOpenAI:
+		return shape == shapeBare || shape == shapeSSE
+	case formatGemini, formatAntigravity:
 		return shape == shapeBare
-	case formatClaude, formatResponses:
+	case formatClaude, formatResponses, formatCodex, formatInteractions:
 		return shape == shapeSSE
 	}
 	return false
+}
+
+// isResponsesLike 判断协议是否使用 Responses 事件名结束语义（codex 与 Responses 同构）。
+func isResponsesLike(format string) bool {
+	return format == formatResponses || format == formatCodex
 }
 
 // RestorePayload 处理宿主投递的一个流块，从不丢弃：每个输入块恰好产出一个输出块。
@@ -113,8 +123,10 @@ func (s *StreamRestorer) restoreSSE(format string, chunk []byte) []byte {
 			out = append(append(out, restored...), ending...)
 		case bytes.HasPrefix(line, []byte("event:")):
 			eventName = strings.TrimSpace(string(line[len("event:"):]))
-			if carry && format == formatResponses {
+			if carry && isResponsesLike(format) {
 				frames = s.deliverByEventName(eventName)
+			} else if carry && format == formatInteractions && (eventName == "done" || eventName == "interaction.completed") {
+				frames = s.deliverAllFrames()
 			}
 			out = insertFrames(out, frameStart, frames)
 			out = append(out, full...)
@@ -136,6 +148,9 @@ func (s *StreamRestorer) restoreDataLine(format string, carry bool, eventName st
 	payload := line[head:]
 	if !json.Valid(payload) {
 		s.text.stats.Passthrough++
+		if format == formatInteractions && string(bytes.TrimSpace(payload)) == "[DONE]" {
+			return line, s.deliverAllFrames()
+		}
 		return line, nil
 	}
 	restored, frames := s.restoreEvent(format, carry, eventName, payload)
@@ -185,6 +200,12 @@ func (s *StreamRestorer) restoreEvent(format string, carry bool, eventName strin
 		next, restored, unknown := s.mapping.RestoreCount(value)
 		t.stats.Restored += restored
 		t.stats.Unknown += unknown
+		if !carry {
+			if tail := holdbackLen(next, t.nonce); tail > 0 {
+				t.stats.UnsupportedEvent++
+				addDanglingSample(&t.stats, next[len(next)-tail:])
+			}
+		}
 		return next, next != value
 	})
 	if err != nil {
@@ -195,7 +216,7 @@ func (s *StreamRestorer) restoreEvent(format string, carry bool, eventName strin
 		return out, nil
 	}
 	out, frames := s.deliverEnded(format, plan, handled, out)
-	if format == formatClaude || format == formatResponses {
+	if format == formatClaude || isResponsesLike(format) || format == formatInteractions {
 		s.storeTemplates(handled, eventName, out)
 	}
 	return out, frames
@@ -223,11 +244,13 @@ func (s *StreamRestorer) deliverEnded(format string, plan eventPlan, handled map
 			continue
 		}
 		var ok bool
-		switch format {
-		case formatOpenAI:
+		switch {
+		case format == formatOpenAI:
 			event, ok = injectOpenAI(event, key, value)
-		case formatGemini:
+		case format == formatGemini:
 			event, ok = injectGemini(event, key, value)
+		case format == formatAntigravity:
+			event, ok = injectAntigravity(event, key, value)
 		default:
 			var frame []byte
 			frame, ok = s.synthFrame(format, key, value)
@@ -273,12 +296,40 @@ func (s *StreamRestorer) synthFrame(format, key, carry string) ([]byte, bool) {
 		return nil, false
 	}
 	var frame []byte
-	if format == formatClaude {
+	switch format {
+	case formatClaude:
 		frame = synthClaude(tpl, carry)
-	} else {
+	case formatInteractions:
+		frame = synthInteractions(tpl, carry)
+	default:
 		frame = synthResponses(tpl, carry)
 	}
 	return frame, frame != nil
+}
+
+// synthSSEPayload 用模板路径替换为 carry 后包装成 SSE 帧；事件名由调用方解析。
+func synthSSEPayload(tpl streamTemplate, carry, eventName string) []byte {
+	if len(tpl.raw) == 0 || len(tpl.path) == 0 || eventName == "" {
+		return nil
+	}
+	body, changed, err := editStrings(tpl.raw, func(path []string, _ string) (string, bool) {
+		if pathEqual(path, tpl.path) {
+			return carry, true
+		}
+		return "", false
+	})
+	if err != nil || !changed {
+		return nil
+	}
+	return wrapSSEFrame(eventName, body)
+}
+
+// wrapSSEFrame 生成 "event: <name>\ndata: <json>\n\n" 帧。
+func wrapSSEFrame(name string, body []byte) []byte {
+	out := make([]byte, 0, len(body)+len(name)+16)
+	out = append(out, "event: "+name+"\ndata: "...)
+	out = append(out, body...)
+	return append(out, "\n\n"...)
 }
 
 // countDelivery 记录一次残留投递：成功计入 Flushed/Synthesized，
@@ -289,6 +340,8 @@ func (s *StreamRestorer) countDelivery(ok bool, carry string) {
 		s.text.stats.Synthesized++
 		return
 	}
+	s.text.stats.MissingTemplate++
+	addDanglingSample(&s.text.stats, carry)
 	s.text.stats.Leftover += len(carry)
 }
 
@@ -320,8 +373,12 @@ func planEvent(format string, event []byte) (eventPlan, bool) {
 		return planGemini(event)
 	case formatClaude:
 		return planClaude(event)
-	case formatResponses:
+	case formatResponses, formatCodex:
 		return planResponses(event)
+	case formatAntigravity:
+		return planAntigravity(event)
+	case formatInteractions:
+		return planInteractions(event)
 	}
 	return eventPlan{}, false
 }

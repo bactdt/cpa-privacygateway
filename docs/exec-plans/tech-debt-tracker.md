@@ -788,16 +788,30 @@
 | 验收方式 | 默认配置 `make check`/`make smoke` 与改前一致；`panel.enabled=true` 时注册声明 management_api、GET panel 200 |
 | 状态 | fixed |
 
+### TD-CPA-052 · 工具输出 id 误脱敏与部分协议流式占位符泄漏（已修复）
+
+| 字段 | 内容 |
+|---|---|
+| 位置 | `redact/detect.go`、`redact/detect_context.go`、`redact/detect_exempt.go`、`redact/walk.go`、`redact/stream_payload.go`、`redact/stream_gemini.go`、`redact/stream_interactions.go`、`trace_hooks.go`、`plugin.go`、`config.go` |
+| 类别 | 隐私 / 可用性 |
+| 严重度 | P1 |
+| 证据（原状） | ① Responses 工具输出中的 UUID 会话 id、`.tar.gz` 文件名主体、`process_id` 值被通用高熵规则替换，破坏工具结果；② `DB_PASSWORD=...` 等敏感键值不被识别；③ openai SSE、Codex 完整帧、Antigravity 裸 JSON、Interactions 的跨块占位符未暂存/投递，残片泄漏到客户端；④ 旧 nonce 占位符无 trace 计数。 |
+| 修复证据 | 2026-10-24：检测顺序加入敏感上下文与高熵豁免（UUID、常见扩展名、内置/配置安全 id）；Responses/Codex 仅补扫 `input[i]` 工具输出；流式暂存表扩展为 openai=bare+SSE、gemini/antigravity=bare、claude/openai-response/codex/interactions=SSE，新增 Interactions 规划器与结束帧全量投递；`StreamStats` 增加 `UnsupportedEvent`/`MissingTemplate`/`LeftoverAtEnd`/`DanglingSamples`，trace 输出 `source_format`、`stale` 等字段。测试：`TestBugCond*`、`TestPreserve*`、`TestDetectProperty*`、`TestStreamPropertyNewProtocols`、`TestInteractions*`、`TestTrace*Leak*`、`FuzzDetect`、`FuzzRedactJSON`。 |
+| 业务行为影响 | 有：减少工具输出误脱敏、补齐敏感键值检测与四类流式还原；纯文本 id 需配置 `safe_id_prefixes` 才豁免 |
+| 关联批次 | 工具输出占位符泄漏修复（`.kiro/specs/tool-output-placeholder-leak/`） |
+| 验收方式 | `go test ./redact -run 'TestBugCond|TestPreserve' -count=1`；`go test ./ -run 'TestTrace' -count=1`；`make check` |
+| 状态 | fixed |
+
 ---
 
 | 严重度 | P0 | 9 | 001–006, 031, 034, 037 |
-| P1 | 26 | 007–018, 028–030, 032, 033, 035, 036, 038–041, 043–045 |
+| P1 | 27 | 007–018, 028–030, 032, 033, 035, 036, 038–041, 043–045, 052 |
 | P2 | 16 | 019–027, 042, 046–051 |
-| **合计** | **51** | |
+| **合计** | **52** | |
 
 | 状态 | 条数 | ID 列表 |
 |---|---|---|
-| fixed | 41 | 001–009, 011, 012, 014–019, 021, 024–029, 030–034, 035–041, 043–045, 051 |
+| fixed | 42 | 001–009, 011, 012, 014–019, 021, 024–029, 030–034, 035–041, 043–045, 051, 052 |
 | declined | 3 | 010, 013, 023 |
 | open | 7 | 020, 022（均已有 benchmark 数据并登记保留决策）；046–050（流式还原已知限制） |
 
@@ -806,10 +820,11 @@
 | Harness 批次 0–5 | 001–030 |
 | 隐私闭环计划 | 017, 018, 028, 029, 031–034, 036, 037–044（评审批与 043/044 补批） |
 | 流式裸载荷修复 | 032（补充）, 045–050 |
+| 工具输出占位符泄漏修复 | 052 |
 | 面板开关与重构 | 051 |
 
 | 业务行为影响 | 涉及 ID |
 |---|---|
-| 无（纯重构/工程/文档） | 除 017, 028, 029, 031–034, 036, 045–050 外全部 |
-| 有（业务变更或安全修复，需复验） | 017、028、029、031、032、033、034、036、045 |
+| 无（纯重构/工程/文档） | 除 017, 028, 029, 031–034, 036, 045–050, 052 外全部 |
+| 有（业务变更或安全修复，需复验） | 017、028、029、031、032、033、034、036、045、052 |
 | 仅登记限制，未改变行为 | 046–050 |

@@ -250,9 +250,14 @@ func (p propTokens) placeholderized(rng *rand.Rand) string {
 
 // propSplit 按 1..12 字节随机切分，切点对齐到 rune 边界（每片至少一个 rune）。
 func propSplit(rng *rand.Rand, text string) []string {
+	return propSplitN(rng, text, 12)
+}
+
+// propSplitN 按 1..max 字节随机切分，切点对齐到 rune 边界。
+func propSplitN(rng *rand.Rand, text string, max int) []string {
 	var pieces []string
 	for len(text) > 0 {
-		cut := 1 + rng.Intn(12)
+		cut := 1 + rng.Intn(max)
 		if cut >= len(text) {
 			pieces = append(pieces, text)
 			break

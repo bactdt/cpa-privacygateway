@@ -10,27 +10,31 @@ import (
 type Kind string
 
 const (
-	KindCredential Kind = "credential"
-	KindEntropy    Kind = "entropy"
-	KindEmail      Kind = "email"
-	KindPhone      Kind = "phone"
-	KindIDCard     Kind = "id_card"
-	KindBankCard   Kind = "bank_card"
-	KindCustom     Kind = "custom"
+	KindCredential    Kind = "credential"
+	KindEntropy       Kind = "entropy"
+	KindEmail         Kind = "email"
+	KindPhone         Kind = "phone"
+	KindIDCard        Kind = "id_card"
+	KindBankCard      Kind = "bank_card"
+	KindCustom        Kind = "custom"
+	KindSecretContext Kind = "secret_context"
 )
 
 type Config struct {
-	Credentials   bool
-	Entropy       bool
-	Email         bool
-	Phone         bool
-	IDCard        bool
-	BankCard      bool
-	MinEntropy    float64
-	MinEntropyLen int
-	Allowlist     []string
-	MaxFindings   int
-	CustomRules   []string
+	Credentials    bool
+	Entropy        bool
+	Email          bool
+	Phone          bool
+	IDCard         bool
+	BankCard       bool
+	MinEntropy     float64
+	MinEntropyLen  int
+	Allowlist      []string
+	MaxFindings    int
+	CustomRules    []string
+	SecretContext  bool
+	SafeIDKeys     []string
+	SafeIDPrefixes []string
 }
 
 func DefaultConfig() Config {
@@ -44,6 +48,7 @@ func DefaultConfig() Config {
 		MinEntropy:    3.5,
 		MinEntropyLen: 24,
 		MaxFindings:   2000,
+		SecretContext: true,
 	}
 }
 
@@ -135,8 +140,20 @@ func (c Config) Detect(text string, base int, out []span) ([]span, bool) {
 			out = append(out, span{start: base + candidate[0], end: base + candidate[1], kind: KindBankCard})
 		}
 	}
+	var kvs []kvMatch
+	if c.SecretContext || c.Entropy {
+		kvs = scanKV(text)
+	}
+	if c.SecretContext {
+		for _, kv := range kvs {
+			if isSensitiveKey(kv.key) && sensitiveValueOK(text[kv.valStart:kv.valEnd]) {
+				out = append(out, span{start: base + kv.valStart, end: base + kv.valEnd, kind: KindSecretContext})
+			}
+		}
+	}
 	if c.Entropy {
-		out = appendEntropy(text, base, c, out)
+		exempt := exemptRanges(text, kvs, c)
+		out = appendEntropy(text, base, c, exempt, out)
 	}
 	for _, value := range allowed {
 		offset := 0
@@ -181,7 +198,7 @@ func (c Config) capFindings(out []span) ([]span, bool) {
 	return kept, true
 }
 
-func appendEntropy(text string, base int, c Config, out []span) []span {
+func appendEntropy(text string, base int, c Config, exempt [][2]int, out []span) []span {
 	minLen := c.MinEntropyLen
 	if minLen <= 0 {
 		minLen = 24
@@ -199,6 +216,9 @@ func appendEntropy(text string, base int, c Config, out []span) []span {
 			continue
 		}
 		if shannon(candidate) < threshold {
+			continue
+		}
+		if fullyExempt(loc[0], loc[1], exempt) {
 			continue
 		}
 		out = append(out, span{start: base + loc[0], end: base + loc[1], kind: KindEntropy})

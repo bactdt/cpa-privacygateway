@@ -102,6 +102,8 @@ func (t traceLogger) redactDone(agg *findingAgg, mappingSize int, elapsed time.D
 		"mapping_size":       mappingSize,
 		"elapsed_us":         elapsed.Microseconds(),
 		"stateless":          stateless,
+		"stale":              agg.stale,
+		"stale_samples":      agg.staleSamples,
 	})
 }
 
@@ -128,24 +130,42 @@ func (t traceLogger) responseRestored(statusCode, bodyBytes, restored, unknown i
 	})
 }
 
-// streamSummary 记录/原地刷新 stream.summary（每块，TD-6）。
+// streamSummary 是旧签名包装，保留给既有 trace 测试与调用方。
 func (t traceLogger) streamSummary(chunks, restored, unknown, carryBytes, maxCarry int) {
+	t.streamSummaryWith("", redact.StreamStats{
+		Chunks: chunks, Restored: restored, Unknown: unknown, MaxPending: maxCarry,
+	}, carryBytes)
+}
+
+// streamSummaryWith 记录/原地刷新 stream.summary（每块，TD-6）。
+func (t traceLogger) streamSummaryWith(sourceFormat string, st redact.StreamStats, carryBytes int) {
 	if !t.on() {
 		return
 	}
 	t.recordLatest("stream.summary", map[string]any{
-		"chunks": chunks, "restored": restored, "unknown": unknown,
-		"carry_bytes": carryBytes, "max_carry": maxCarry,
+		"chunks": st.Chunks, "restored": st.Restored, "unknown": st.Unknown,
+		"carry_bytes": carryBytes, "max_carry": st.MaxPending,
+		"source_format":     sourceFormat,
+		"unsupported_event": st.UnsupportedEvent, "missing_template": st.MissingTemplate,
+		"leftover_at_end": st.LeftoverAtEnd, "dangling_samples": st.DanglingSamples,
 	})
 }
 
-// streamFlush 记录 stream.flush（结束冲刷之后，需求 8）。
+// streamFlush 是旧签名包装，保留给既有 trace 测试与调用方。
 func (t traceLogger) streamFlush(flushed, flushedBytes, carryBytes int) {
+	t.streamFlushWith("", redact.StreamStats{Flushed: flushed}, flushedBytes, carryBytes)
+}
+
+// streamFlushWith 记录 stream.flush（结束冲刷之后，需求 8）。
+func (t traceLogger) streamFlushWith(sourceFormat string, st redact.StreamStats, flushedBytes, carryBytes int) {
 	if !t.on() {
 		return
 	}
 	t.record("stream.flush", map[string]any{
-		"flushed": flushed, "flushed_bytes": flushedBytes, "carry_bytes": carryBytes,
+		"flushed": st.Flushed, "flushed_bytes": flushedBytes, "carry_bytes": carryBytes,
+		"source_format":     sourceFormat,
+		"unsupported_event": st.UnsupportedEvent, "missing_template": st.MissingTemplate,
+		"leftover_at_end": st.LeftoverAtEnd, "dangling_samples": st.DanglingSamples,
 	})
 }
 
@@ -175,15 +195,27 @@ func (t traceLogger) complete(outcome string, statusCode int, hasError bool, sta
 
 // findingAgg 聚合一次脱敏的 Finding：总数、按 Kind 计数、掩码明细（上限 64）。
 type findingAgg struct {
-	total     int
-	counts    map[string]int
-	details   []map[string]any
-	truncated int
+	total        int
+	counts       map[string]int
+	details      []map[string]any
+	truncated    int
+	stale        int
+	staleSamples []string
 }
 
 // newFindingAgg 构造聚合并返回 sink（挂到 WalkOptions.OnFinding）。
 func newFindingAgg() *findingAgg {
 	return &findingAgg{counts: map[string]int{}}
+}
+
+const staleSampleMax = 5
+
+// staleSink 聚合过期占位符（nonce 不属于本请求）；样例已掩码，不含原值。
+func (a *findingAgg) staleSink(_ []string, sample string) {
+	a.stale++
+	if len(a.staleSamples) < staleSampleMax {
+		a.staleSamples = append(a.staleSamples, sample)
+	}
 }
 
 func (a *findingAgg) sink(f redact.Finding) {

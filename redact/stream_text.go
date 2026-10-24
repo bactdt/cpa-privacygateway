@@ -5,16 +5,46 @@ import "strings"
 // StreamStats 汇总一个 StreamRestorer 生命周期内的流式还原统计，
 // 供 request-trace-log 暴露；所有计数只增不减（reset 不清零）。
 type StreamStats struct {
-	Chunks      int // RestorePayload 调用次数
-	Events      int // 成功解析的 JSON 事件数
-	Restored    int // 还原的占位符个数
-	Unknown     int // 本 nonce 但不在映射中的占位符个数
-	Carried     int // 发生暂扣的次数
-	MaxPending  int // 单个文本流最大暂扣字节数
-	Flushed     int // 结束信号投递残留的次数
-	Synthesized int // 注入字段或合成增量帧的次数
-	Passthrough int // 非 JSON / 解析失败原样透传的载荷数
-	Leftover    int // Flush 时未能投递而丢弃的残留字节数
+	Chunks           int      // RestorePayload 调用次数
+	Events           int      // 成功解析的 JSON 事件数
+	Restored         int      // 还原的占位符个数
+	Unknown          int      // 本 nonce 但不在映射中的占位符个数
+	Carried          int      // 发生暂扣的次数
+	MaxPending       int      // 单个文本流最大暂扣字节数
+	Flushed          int      // 结束信号投递残留的次数
+	Synthesized      int      // 注入字段或合成增量帧的次数
+	Passthrough      int      // 非 JSON / 解析失败原样透传的载荷数
+	Leftover         int      // Flush 时未能投递而丢弃的残留字节数
+	UnsupportedEvent int      // 无暂存能力的组合或未规划事件中出现残片
+	MissingTemplate  int      // 结束信号到达但无模板/无法注入，残留丢失
+	LeftoverAtEnd    int      // Flush 时仍有残留的文本流数
+	DanglingSamples  []string // 至多 5 个掩码残片
+}
+
+const (
+	danglingSampleMax    = 5
+	danglingSampleMaxLen = 16
+)
+
+// maskDangling 把残片掩码为 `[[PG_<nonce 前 4 位>…`，并保证不超过 16 rune。
+// 残片本身只含占位符语法，不含原始敏感值。
+func maskDangling(value string) string {
+	if strings.HasPrefix(value, placeholderOpen) && len(value) > len(placeholderOpen)+4 {
+		value = value[:len(placeholderOpen)+4] + "…"
+	}
+	runes := []rune(value)
+	if len(runes) > danglingSampleMaxLen {
+		runes = append(runes[:danglingSampleMaxLen-1], '…')
+	}
+	return string(runes)
+}
+
+// addDanglingSample 追加一个掩码残片样例，最多保留 5 个。
+func addDanglingSample(stats *StreamStats, value string) {
+	if value == "" || len(stats.DanglingSamples) >= danglingSampleMax {
+		return
+	}
+	stats.DanglingSamples = append(stats.DanglingSamples, maskDangling(value))
 }
 
 // streamTemplate 记录 SSE 协议某文本流最近一次 delta 事件，

@@ -296,16 +296,176 @@ func TestRestorePayloadLineEndingsAndPrefix(t *testing.T) {
 }
 
 func TestRestorePayloadCarryOnlyWhenDeliverable(t *testing.T) {
-	// openai 的 SSE 形态与 claude 的裸形态不暂扣：前缀残片原样输出。
+	// claude 的裸形态不暂扣：前缀残片原样输出。
 	s, phs := newPayloadFixture(t, "user@example.com")
 	half := phs[0][:10]
-	sse := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":" + jsonText("a "+half) + "}}]}\n\n"
-	if out, changed := s.RestorePayload("openai", []byte(sse)); changed || !bytes.Contains(out, []byte(half)) {
-		t.Fatalf("openai sse held back: %q", out)
-	}
 	bare := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + jsonText(half) + `}}`
 	if out, changed := s.RestorePayload("claude", []byte(bare)); changed || string(out) != bare {
 		t.Fatalf("claude bare held back: %q", out)
+	}
+	if s.Pending() != 0 {
+		t.Fatalf("pending = %d", s.Pending())
+	}
+
+	// openai 的 SSE 形态修复后可暂存：残片等待 finish 帧注入。
+	s2, phs2 := newPayloadFixture(t, "user@example.com")
+	half = phs2[0][:10]
+	sse := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":" + jsonText("a "+half) + "}}]}\n\n"
+	out, changed := s2.RestorePayload("openai", []byte(sse))
+	if !changed || bytes.Contains(out, []byte(half)) {
+		t.Fatalf("openai sse 未暂存：changed=%v out=%q", changed, out)
+	}
+	if s2.Pending() == 0 {
+		t.Fatalf("openai sse pending = 0")
+	}
+}
+
+func openAISSEFrame(content string) string {
+	return `data: {"id":"x","choices":[{"index":0,"delta":{"content":` + jsonText(content) + `},"finish_reason":null}]}` + "\n\n"
+}
+
+func TestRestorePayloadOpenAISSESplit(t *testing.T) {
+	s, phs := newPayloadFixture(t, "user@example.com")
+	ph := phs[0]
+	pieces := []string{"A " + ph[:8], ph[8:20], ph[20:] + " B [[PG"}
+	var got strings.Builder
+	for _, piece := range pieces {
+		out := effectiveOut(t, s, "openai", openAISSEFrame(piece))
+		for _, payload := range sseDataPayloads(t, out) {
+			got.WriteString(decodeField(t, payload, openAIContent))
+		}
+	}
+	finish := `data: {"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n"
+	out := effectiveOut(t, s, "openai", finish)
+	for _, payload := range sseDataPayloads(t, out) {
+		got.WriteString(decodeField(t, payload, openAIContent))
+	}
+	if got.String() != "A user@example.com B [[PG" {
+		t.Fatalf("got %q", got.String())
+	}
+	if st := s.Stats(); st.Synthesized != 1 || st.Flushed != 1 || st.Leftover != 0 || s.Pending() != 0 {
+		t.Fatalf("stats = %+v pending=%d", st, s.Pending())
+	}
+}
+
+func codexDeltaFrame(piece string) string {
+	return "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"m1\",\"output_index\":0,\"content_index\":0,\"delta\":" + jsonText(piece) + "}\n\n"
+}
+
+func TestRestorePayloadCodexFramesSplit(t *testing.T) {
+	s, phs := newPayloadFixture(t, "user@example.com")
+	ph := phs[0]
+	pieces := []string{"A " + ph[:7], ph[7:19], ph[19:] + " B [[PG"}
+	var got strings.Builder
+	for _, piece := range pieces {
+		out := effectiveOut(t, s, "codex", codexDeltaFrame(piece))
+		for _, payload := range sseDataPayloads(t, out) {
+			got.WriteString(decodeField(t, payload, func(v map[string]any) string { return v["delta"].(string) }))
+		}
+	}
+	done := "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"output_index\":0,\"content_index\":0,\"text\":\"x\"}\n\n"
+	out := effectiveOut(t, s, "codex", done)
+	payloads := sseDataPayloads(t, out)
+	if len(payloads) != 2 {
+		t.Fatalf("done 帧数 = %d：%q", len(payloads), out)
+	}
+	for _, payload := range payloads {
+		if v := decodeField(t, payload, func(v map[string]any) string { return v["type"].(string) }); v != "response.output_text.delta" && v != "response.output_text.done" {
+			t.Fatalf("未知合成事件：%s", payload)
+		}
+	}
+	got.WriteString(decodeField(t, payloads[0], func(v map[string]any) string { return v["delta"].(string) }))
+	if got.String() != "A user@example.com B [[PG" {
+		t.Fatalf("got %q", got.String())
+	}
+	if st := s.Stats(); st.Synthesized != 1 || st.Leftover != 0 || s.Pending() != 0 {
+		t.Fatalf("stats = %+v pending=%d", st, s.Pending())
+	}
+}
+
+func TestRestorePayloadAntigravityBareSplit(t *testing.T) {
+	s, phs := newPayloadFixture(t, "user@example.com")
+	ph := phs[0]
+	pieces := []string{"A " + ph[:9], ph[9:21], ph[21:] + " B [[PG"}
+	var got strings.Builder
+	for _, piece := range pieces {
+		chunk := `{"response":{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":` + jsonText(piece) + `}]}}]}}`
+		out := effectiveOut(t, s, "antigravity", chunk)
+		var v struct {
+			Response struct {
+				Candidates []struct {
+					Content struct {
+						Parts []struct{ Text string }
+					}
+				}
+			}
+		}
+		if err := json.Unmarshal([]byte(out), &v); err != nil {
+			t.Fatalf("invalid JSON %s: %v", out, err)
+		}
+		got.WriteString(v.Response.Candidates[0].Content.Parts[0].Text)
+	}
+	out := effectiveOut(t, s, "antigravity", `{"response":{"candidates":[{"index":0,"finishReason":"STOP"}]}}`)
+	var v struct {
+		Response struct {
+			Candidates []struct {
+				Content struct {
+					Parts []struct{ Text string }
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("finish invalid JSON %s: %v", out, err)
+	}
+	got.WriteString(v.Response.Candidates[0].Content.Parts[0].Text)
+	if got.String() != "A user@example.com B [[PG" {
+		t.Fatalf("got %q", got.String())
+	}
+	if st := s.Stats(); st.Synthesized != 1 || st.Flushed != 1 || st.Leftover != 0 || s.Pending() != 0 {
+		t.Fatalf("stats = %+v pending=%d", st, s.Pending())
+	}
+}
+
+func TestRestorePayloadUnsupportedEventCounted(t *testing.T) {
+	s, phs := newPayloadFixture(t, "user@example.com")
+	nonce := s.mapping.Nonce()
+	partial := phs[0][:12]
+	bare := []byte(`{"type":"response.output_text.delta","delta":` + jsonText("x "+partial) + `}`)
+	out, changed := s.RestorePayload("openai-response", bare)
+	if changed || !bytes.Equal(out, bare) {
+		t.Fatalf("openai-response bare 应原样输出：changed=%v out=%s", changed, out)
+	}
+	if st := s.Stats(); st.UnsupportedEvent != 1 || len(st.DanglingSamples) != 1 {
+		t.Fatalf("stats = %+v", st)
+	} else if strings.Contains(st.DanglingSamples[0], nonce[4:]) {
+		t.Fatalf("样例泄露 nonce：%q", st.DanglingSamples[0])
+	}
+
+	s2, phs2 := newPayloadFixture(t, "user@example.com")
+	frame := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":" + jsonText("x "+phs2[0][:10]) + "}}]}\n\n"
+	if out, changed := s2.RestorePayload("unknown-format", []byte(frame)); changed {
+		t.Fatalf("unknown format 应原样输出：%s", out)
+	}
+	if st := s2.Stats(); st.UnsupportedEvent != 1 {
+		t.Fatalf("unknown format stats = %+v", st)
+	}
+}
+
+func TestRestorePayloadMissingTemplateCounted(t *testing.T) {
+	s, phs := newPayloadFixture(t, "user@example.com")
+	piece := "A " + phs[0][:10]
+	if out := effectiveOut(t, s, "codex", codexDeltaFrame(piece)); strings.Contains(out, "[[PG_") {
+		t.Fatalf("delta 未暂存：%q", out)
+	}
+	s.text.templates = nil
+	done := "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"output_index\":0,\"content_index\":0,\"text\":\"x\"}\n\n"
+	out := effectiveOut(t, s, "codex", done)
+	if out != done {
+		t.Fatalf("无模板时不应合成帧：%q", out)
+	}
+	if st := s.Stats(); st.MissingTemplate != 1 || st.Synthesized != 0 || st.Leftover == 0 {
+		t.Fatalf("stats = %+v", st)
 	}
 	if s.Pending() != 0 {
 		t.Fatalf("pending = %d", s.Pending())

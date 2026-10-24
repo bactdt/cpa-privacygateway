@@ -40,6 +40,12 @@ allowlist: []
 # 自定义脱敏规则（RE2 正则）；命中的文本会进入同一请求映射并在响应侧还原。
 # 例如：custom_rules: ['CUSTOM-[A-Z0-9]{8}']
 custom_rules: []
+# 安全 id 键名：键名不区分大小写、忽略 `_`/`-`；其值不参与高熵检测。
+# 内置安全键名：process_id、pid、trace_id、request_id。
+safe_id_keys: []
+# 安全 id 前缀：区分大小写，至少 3 字符且以 `_` 或 `-` 结尾；
+# 与已知密钥前缀（sk、gh、glpat、hf、npm 等）冲突时拒绝启动。
+safe_id_prefixes: []
 
 # —— 检测器开关与阈值 ——
 detectors:
@@ -49,6 +55,7 @@ detectors:
   phone: true
   id_card: true       # 身份证号
   bank_card: true
+  secret_context: true # 敏感键名（PASSWORD/TOKEN 等）的值不看熵直接脱敏
   # 高熵检测阈值：低于该熵值不判为敏感。
   min_entropy: 0
   # 高熵检测的最短长度。

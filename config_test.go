@@ -157,3 +157,99 @@ func TestParseConfigRedactConfig(t *testing.T) {
 		t.Errorf("redact.Email 应默认启用")
 	}
 }
+
+func TestConfigSafeIDDefaults(t *testing.T) {
+	cfg, err := parseConfig(nil)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	rc := cfg.redactConfig()
+	if !rc.SecretContext {
+		t.Errorf("secret_context 应默认开启")
+	}
+	if len(rc.SafeIDKeys) != 0 || len(rc.SafeIDPrefixes) != 0 {
+		t.Errorf("safe id 列表应默认空：keys=%v prefixes=%v", rc.SafeIDKeys, rc.SafeIDPrefixes)
+	}
+}
+
+func TestConfigSafeIDPrefixValidation(t *testing.T) {
+	rejected := []struct{ prefix, reason string }{
+		{"pr", "at least 3 characters"},
+		{"proc", "end with"},
+		{"sk_", "known secret prefix"},
+		{"SK-", "known secret prefix"},
+		{"gh", "at least 3 characters"},
+		{"glpat-", "known secret prefix"},
+		{"hf_", "known secret prefix"},
+		{"npm_", "known secret prefix"},
+		{"s", "at least 3 characters"},
+	}
+	for _, tc := range rejected {
+		raw := "safe_id_prefixes: [" + tc.prefix + "]\n"
+		_, err := parseConfig([]byte(raw))
+		if err == nil {
+			t.Errorf("prefix %q 应被拒绝", tc.prefix)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "safe_id_prefixes[0]") || !strings.Contains(msg, tc.reason) {
+			t.Errorf("错误信息缺少序号或原因：%s", msg)
+		}
+	}
+	_, err := parseConfig([]byte("safe_id_prefixes: [xxMARKER]\n"))
+	if err == nil || strings.Contains(err.Error(), "MARKER") {
+		t.Errorf("错误信息回显了配置值：%v", err)
+	}
+	for _, prefix := range []string{"proc_", "bash-session-"} {
+		cfg, err := parseConfig([]byte("safe_id_prefixes: [" + prefix + "]\n"))
+		if err != nil {
+			t.Errorf("prefix %q 应通过：%v", prefix, err)
+			continue
+		}
+		if got := cfg.redactConfig().SafeIDPrefixes; len(got) != 1 || got[0] != prefix {
+			t.Errorf("prefix %q 未传入 redact.Config：%v", prefix, got)
+		}
+	}
+	cfg, err := parseConfig([]byte("safe_id_prefixes: [\" proc_ \"]\n"))
+	if err != nil || len(cfg.redactConfig().SafeIDPrefixes) != 1 || cfg.redactConfig().SafeIDPrefixes[0] != "proc_" {
+		t.Fatalf("空白未去除：cfg=%+v err=%v", cfg.redactConfig().SafeIDPrefixes, err)
+	}
+}
+
+func TestConfigSafeIDKeyValidation(t *testing.T) {
+	for _, key := range []string{"api_token", "client_secret"} {
+		_, err := parseConfig([]byte("safe_id_keys: [" + key + "]\n"))
+		if err == nil {
+			t.Errorf("safe_id_keys %q 应被拒绝", key)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "safe_id_keys[0]") || strings.Contains(msg, key) {
+			t.Errorf("错误信息不合规：%s", msg)
+		}
+	}
+	cfg, err := parseConfig([]byte("safe_id_keys: [session_id]\n"))
+	if err != nil {
+		t.Fatalf("session_id 应通过：%v", err)
+	}
+	if got := cfg.redactConfig().SafeIDKeys; len(got) != 1 || got[0] != "session_id" {
+		t.Fatalf("safe_id_keys 未传入：%v", got)
+	}
+}
+
+func TestConfigSecretContextOverride(t *testing.T) {
+	cfg, err := parseConfig([]byte("detectors:\n  secret_context: false\n"))
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.redactConfig().SecretContext {
+		t.Errorf("secret_context:false 未生效")
+	}
+	cfg, err = parseConfig([]byte("detectors:\n  secret_context: true\n"))
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if !cfg.redactConfig().SecretContext {
+		t.Errorf("secret_context:true 未生效")
+	}
+}

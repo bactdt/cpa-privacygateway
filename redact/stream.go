@@ -41,7 +41,9 @@ func (s *StreamRestorer) Pending() int {
 func (s *StreamRestorer) Stats() StreamStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.text.stats
+	stats := s.text.stats
+	stats.DanglingSamples = append([]string(nil), s.text.stats.DanglingSamples...)
+	return stats
 }
 
 func (s *StreamRestorer) RestoreChunk(chunk []byte) ([]byte, bool) {
@@ -83,7 +85,14 @@ func (s *StreamRestorer) Flush() []byte {
 	defer s.mu.Unlock()
 	out := s.pending
 	s.pending = s.pending[:0]
-	// 文本流暂扣在 Flush 时已无法投递，计入 Leftover 后丢弃。
+	// 文本流暂扣在 Flush 时已无法投递：逐流计 LeftoverAtEnd，
+	// 字节数仍计入 Leftover，然后丢弃。
+	for _, key := range sortedKeys(s.text.carry) {
+		if value := s.text.carry[key]; value != "" {
+			s.text.stats.LeftoverAtEnd++
+			addDanglingSample(&s.text.stats, value)
+		}
+	}
 	s.text.stats.Leftover += s.text.pendingBytes()
 	s.text.reset()
 	return out

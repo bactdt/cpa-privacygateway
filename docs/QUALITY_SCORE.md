@@ -1,6 +1,8 @@
 # 质量评分
 
-> 更新：2026-10-13。当前覆盖率取自并发审查修正后 `make check` 生成的 `coverage.out`：整体 87.44%、主包 80.1%、redact 91.67%。第 1 节保留 2026-10-11 的历史评分，不将历史文件覆盖率当作本轮值。分数衡量可维护性，不是安全认证或平台验收。
+> 更新：2026-10-24。当前覆盖率取自工具输出占位符泄漏修复后 `make coverage` 生成的 `coverage.out`：整体 89.55%、主包 86.0%、redact 92.21%。第 1 节保留 2026-10-11 的历史评分，不将历史文件覆盖率当作本轮值。分数衡量可维护性，不是安全认证或平台验收。
+
+2026-10-24：修复工具输出 id 误脱敏与四类流式占位符泄漏（TD-CPA-052）。新增 `TestBugCond*`（修复前失败）、`TestPreserve*`、`TestDetectProperty*`、`TestStreamPropertyNewProtocols`、`TestInteractions*`、`TestTrace*Leak*`；`FuzzDetect` 与 `FuzzRedactJSON` 各 30s 无失败。检测新增敏感上下文与高熵豁免，Responses/Codex 仅补扫 `input[i]` 工具输出，流式暂存扩展到 openai SSE / Codex 完整帧 / Antigravity / Interactions，trace 增加 `source_format`、`stale` 与残留统计。
 
 发布元数据：仓库根目录已有 `plugin.yaml` 草案（v0.1.3，linux/amd64）；`plugin.json` registry 采用 schema v2/direct（CPA v8.0.22 支持）；官方开发文档对齐已完成：ZIP 根目录动态库布局、面板关闭时不声明 `management_api`、README 手动安装步骤均已按 https://help.router-for.me/plugin/development.html 校正。2026-10-13：面板可达性改为配置驱动（`panel.enabled`，默认 false，TD-051），面板 UI 重构为 Tab + 模块命名空间（行为守恒）。
 
@@ -37,13 +39,13 @@
 
 | 指标 | 当前 | 目标/下一步 |
 |---|---|---|
-| 报告整体覆盖率 | 89.32%（2026-10-21 `make coverage`，RT-1 追踪落地后） | 保持 >=70%，变更后重新生成 |
-| redact 包 | 92.31% | 保持 >=80%，增加安全失败用例 |
-| 主包 | 可见性联动分支由 `TestManagementVisibleRequiresBothSwitches` 覆盖；C 路径不可从 Go 测试触发 | 优先补 ABI cgo 路径，不用重复用例凑覆盖率 |
+| 报告整体覆盖率 | 89.55%（2026-10-24 `make coverage`，TD-CPA-052 修复后） | 保持 >=70%，变更后重新生成 |
+| redact 包 | 92.21% | 保持 >=80%，增加安全失败用例 |
+| 主包 | 86.0%（2026-10-24）；可见性联动分支由 `TestManagementVisibleRequiresBothSwitches` 覆盖；C 路径不可从 Go 测试触发 | 优先补 ABI cgo 路径，不用重复用例凑覆盖率 |
 | 门禁 | `make check` 含 -race；`make vulncheck` 独立目标；fuzz×3 + benchmark×3 已入库 | fuzz 纳入 CI 定期执行 |
 | 复杂度 | walkValue、Detect 热点按已有处置保留 | 不把历史行数下降当作当前自动度量结果 |
-| 技术债 | 51 项：41 fixed、3 declined、7 open（020/022 均已 benchmark 并登记保留决策；046–050 为流式还原已知限制；051 面板开关配置化已修复） | P0 全部清零（043 max_findings 超限 fail-closed 闭合）；044 ABI 层 panic/不可用 fail-closed 终止信封闭合；018 白名单重建、017 语义终版 |
-| 隐私闭环 | 本轮同 ID 映射/格式、after-auth 准入、热重载交错已有 Go 层回归证据；超时回收仍可能丢映射 | 新版本真实宿主联调另行验证，不据此宣称零漏报/零并发缺陷 |
+| 技术债 | 52 项：42 fixed、3 declined、7 open（020/022 均已 benchmark 并登记保留决策；046–050 为流式还原已知限制；051 面板开关配置化、052 工具输出泄漏均已修复） | P0 全部清零（043 max_findings 超限 fail-closed 闭合）；044 ABI 层 panic/不可用 fail-closed 终止信封闭合；018 白名单重建、017 语义终版 |
+| 隐私闭环 | 本轮同 ID 映射/格式、after-auth 准入、热重载交错已有 Go 层回归证据；工具输出补扫、敏感上下文与四类流式暂存已有单元/属性/fuzz 证据；超时回收仍可能丢映射 | 新版本真实宿主联调另行验证，不据此宣称零漏报/零并发缺陷 |
 | 可观测性（RT-1 追踪） | 仅内存环形缓冲 + 掩码预览事件流；`GET/DELETE /v0/management/privacygateway/traces` 与 `trace` 页面（trace.html，Bearer+增量轮询）；单元/契约测试与 `make smoke` 通过；**本机真实 CPA 宿主验收通过（2026-10-21）**：页面/鉴权/GET 掩码/DELETE cleared/资源通道 404/线格式解码 | RT-2 宿主日志关联与 RT-3 流式详情另立计划 |
 | 端到端 | 已有交付物 C 加载冒烟（`make smoke`：dlopen→init→register→脱敏→管理接口（可见性关闭返回 404/空 routes/resources；双开关开启时 routes 含完整 traces 路径）→shutdown，对 zip 根目录解压后的 .so 通过；`make smoke-panel` 按双开关开启路径验证页面 200/HTML、数据 GET 含 `redact.done` 且不含原值、DELETE 返回 `cleared`） | 用户真实 CPA 宿主已验收脱敏、流式与非流式还原（2026-10-11，用户执行）；trace 日志页已实现并于 2026-10-21 通过本机真实 CPA 宿主验收（dlopen 加载、页面 200、数据鉴权与掩码核验） |
 

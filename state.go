@@ -217,6 +217,22 @@ func (t *stateTable) streamRestorer(requestID string) *redact.StreamRestorer {
 	return state.getStreamRestorer()
 }
 
+// format 返回请求绑定的源格式；条目不存在时返回空串。
+func (t *stateTable) format(requestID string) string {
+	t.mu.Lock()
+	if t.redirect != nil {
+		next := t.redirect
+		t.mu.Unlock()
+		return next.format(requestID)
+	}
+	state, ok := t.entries[requestID]
+	t.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	return state.getFormat()
+}
+
 func (t *stateTable) mapping(requestID string) *redact.Mapping {
 	t.mu.Lock()
 	if t.redirect != nil {

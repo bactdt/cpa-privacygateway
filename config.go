@@ -20,6 +20,7 @@ type detectorConfig struct {
 	BankCard      *bool   `yaml:"bank_card"`
 	MinEntropy    float64 `yaml:"min_entropy"`
 	MinEntropyLen int     `yaml:"min_entropy_len"`
+	SecretContext *bool   `yaml:"secret_context"`
 }
 
 // panelConfig 控制内嵌检测面板（management 资源路由 panel）的可达性。
@@ -44,6 +45,8 @@ type config struct {
 	MaxFindings         int            `yaml:"max_findings"`
 	Allowlist           []string       `yaml:"allowlist"`
 	CustomRules         []string       `yaml:"custom_rules"`
+	SafeIDKeys          []string       `yaml:"safe_id_keys"`
+	SafeIDPrefixes      []string       `yaml:"safe_id_prefixes"`
 	Detectors           detectorConfig `yaml:"detectors"`
 	Panel               panelConfig    `yaml:"panel"`
 	// RT-1 追踪（TD-5：开箱可见）。默认 true/200/64。
@@ -110,6 +113,26 @@ func parseConfig(raw []byte) (config, error) {
 	for i, pattern := range cfg.CustomRules {
 		if _, err := regexp.Compile(pattern); err != nil {
 			return config{}, fmt.Errorf("custom_rules[%d] is invalid: %v", i, err)
+		}
+	}
+	for i, raw := range cfg.SafeIDPrefixes {
+		prefix := strings.TrimSpace(raw)
+		if len(prefix) < 3 {
+			return config{}, fmt.Errorf("safe_id_prefixes[%d] must be at least 3 characters", i)
+		}
+		if !strings.HasSuffix(prefix, "_") && !strings.HasSuffix(prefix, "-") {
+			return config{}, fmt.Errorf("safe_id_prefixes[%d] must end with '_' or '-'", i)
+		}
+		lower := strings.ToLower(prefix)
+		for _, known := range redact.KnownSecretPrefixes {
+			if strings.HasPrefix(lower, known) || strings.HasPrefix(known, lower) {
+				return config{}, fmt.Errorf("safe_id_prefixes[%d] conflicts with a known secret prefix", i)
+			}
+		}
+	}
+	for i, raw := range cfg.SafeIDKeys {
+		if redact.IsSensitiveKey(strings.TrimSpace(raw)) {
+			return config{}, fmt.Errorf("safe_id_keys[%d] must not be a sensitive key name", i)
 		}
 	}
 	return cfg, nil
@@ -268,6 +291,17 @@ func (c config) keywords() []string {
 	return out
 }
 
+// trimmedList 去空白并丢弃空项，返回独立副本。
+func trimmedList(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func (c config) redactConfig() redact.Config {
 	base := redact.DefaultConfig()
 	set := func(target *bool, value *bool) {
@@ -281,6 +315,7 @@ func (c config) redactConfig() redact.Config {
 	set(&base.Phone, c.Detectors.Phone)
 	set(&base.IDCard, c.Detectors.IDCard)
 	set(&base.BankCard, c.Detectors.BankCard)
+	set(&base.SecretContext, c.Detectors.SecretContext)
 	if c.Detectors.MinEntropy > 0 {
 		base.MinEntropy = c.Detectors.MinEntropy
 	}
@@ -292,5 +327,7 @@ func (c config) redactConfig() redact.Config {
 	}
 	base.Allowlist = append([]string(nil), c.Allowlist...)
 	base.CustomRules = append([]string(nil), c.CustomRules...)
+	base.SafeIDKeys = trimmedList(c.SafeIDKeys)
+	base.SafeIDPrefixes = trimmedList(c.SafeIDPrefixes)
 	return base
 }
