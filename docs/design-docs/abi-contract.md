@@ -123,6 +123,9 @@ CPA 通过 `plugins.configs.<pluginID>` 传入 YAML 子配置。完整示例见 
 | allowlist | 空数组 | 字面子串允许区间；有交集的敏感候选不替换 |
 | custom_rules | 空数组 | Go RE2 正则，命中值进入请求映射；非法正则拒绝配置 |
 | detectors.credentials/entropy/email/phone/id_card/bank_card | true | 独立开关；未指定沿用默认 |
+| detectors.secret_context | true | 敏感键名上下文检测；关闭后不再扫描 `KEY=value` 等写法（高熵豁免仍读取安全键配置） |
+| safe_id_keys | 空数组 | 额外视为安全 id 的键名（忽略 `_`/`-` 与大小写）；敏感键名永远不豁免；元素不得为空或命中敏感键 |
+| safe_id_prefixes | 空数组 | 额外视为安全 id 的 token 前缀；至少 3 字符、以 `_` 或 `-` 结尾，且不得与已知密钥前缀互为前缀 |
 | detectors.min_entropy | 3.5 | YAML 0 使用领域默认，负数拒绝 |
 | detectors.min_entropy_len | 24 | YAML <=0 使用领域默认 |
 | max_findings | 2000 | 单字段检出上限；负数拒绝；超限 fail_closed 500 max_findings_exceeded / fail_open 原样放行；allowlist 不计（TD-CPA-043） |
@@ -247,7 +250,7 @@ before/after-auth 共用格式处理：在条目锁内绑定首次非空 SourceF
 ```json
 {
   "version": "0.1.6",
-  "plugin": {"version": "0.1.7", "enabled": true, "fail_closed": true, "trace_enabled": true, "trace_recording": true},
+  "plugin": {"version": "0.1.8", "enabled": true, "fail_closed": true, "trace_enabled": true, "trace_recording": true},
   "limits": {"max_requests": 200, "max_events": 64, "max_finding_details": 64},
   "recording": true, "buffered": 3, "evicted": 0, "next_since": 7,
   "requests": [{ "...Trace_Record：id/started_at/finished_at/request_id/trace_id/format/stream/outcome/status/duration_ms/partial + events 与 findings 明细...": "..." }]

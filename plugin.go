@@ -14,7 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-const pluginVersion = "0.1.7"
+const pluginVersion = "0.1.8"
 
 var supportedFormats = map[string]bool{
 	"openai":          true,
@@ -343,7 +343,7 @@ func (p *plugin) InterceptStreamChunk(ctx context.Context, req pluginapi.StreamC
 	// stream.summary 每块原地更新（TD-6）；块内容本身绝不入库（需求 5）。
 	if tl := p.trace(req.RequestID, ""); tl.on() {
 		st := restorer.Stats()
-		tl.streamSummary(st.Chunks, st.Restored, st.Unknown, restorer.Pending(), st.MaxPending)
+		tl.streamSummaryWith(req.SourceFormat, st, restorer.Pending())
 	}
 	if !changed {
 		return pluginapi.StreamChunkInterceptResponse{}, nil
@@ -361,9 +361,10 @@ func (p *plugin) HandleRequestComplete(ctx context.Context, completion pluginapi
 		carry := restorer.Pending()
 		out := restorer.Flush()
 		st := restorer.Stats()
+		sourceFormat := p.states.format(completion.RequestID)
 		// 仅在确有冲刷内容/流活动时记录 stream.flush，避免非流式请求产生噪音事件。
 		if carry > 0 || len(out) > 0 || st.Flushed > 0 || st.Chunks > 0 {
-			tl.streamFlush(st.Flushed, len(out), carry)
+			tl.streamFlushWith(sourceFormat, st, len(out), carry)
 		}
 	}
 	p.states.release(completion.RequestID)
@@ -419,6 +420,7 @@ func redactObservedJSON(format string, body []byte, mapping *redact.Mapping, det
 	agg := newFindingAgg()
 	if tl.on() {
 		opts.OnFinding = agg.sink
+		opts.OnStale = agg.staleSink
 	}
 	start := time.Now()
 	redacted, count, err := redact.RedactJSON(format, body, mapping, detector, opts)

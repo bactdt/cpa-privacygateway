@@ -30,17 +30,17 @@ https://raw.githubusercontent.com/bactdt/cpa-privacygateway/main/plugin.json
 
 ```sh
 cd /path/to/CPA
-mkdir -p /tmp/privacygateway-0.1.7
-unzip privacygateway_0.1.7_linux_amd64.zip -d /tmp/privacygateway-0.1.7
-(cd /tmp/privacygateway-0.1.7 && sha256sum -c privacygateway/checksums.txt)
-install -D -m 0755 /tmp/privacygateway-0.1.7/privacygateway-v0.1.7.so \
-  plugins/linux/amd64/privacygateway-v0.1.7.so
+mkdir -p /tmp/privacygateway-0.1.8
+unzip privacygateway_0.1.8_linux_amd64.zip -d /tmp/privacygateway-0.1.8
+(cd /tmp/privacygateway-0.1.8 && sha256sum -c privacygateway/checksums.txt)
+install -D -m 0755 /tmp/privacygateway-0.1.8/privacygateway-v0.1.8.so \
+  plugins/linux/amd64/privacygateway-v0.1.8.so
 ```
 
 CPA 插件商店安装器会将动态库写入：
 
 ```text
-plugins/linux/amd64/privacygateway-v0.1.7.so
+plugins/linux/amd64/privacygateway-v0.1.8.so
 ```
 
 ## 配置
